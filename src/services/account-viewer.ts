@@ -3,6 +3,7 @@
 // using yt-dlp (already a project prerequisite) as the data source.
 
 import { spawn } from 'child_process';
+import type { Translations } from '../i18n/types.js';
 
 export type Platform = 'tiktok' | 'instagram' | 'youtube';
 
@@ -223,8 +224,8 @@ function pad(n: number): string { return n < 10 ? '0' + n : '' + n; }
 function trimDecimal(s: string): string { return s.replace(/\.?0+$/, ''); }
 
 /** Format counts like the requested layout: 15.6K, 1 394, 81.95K, 1.2M. */
-export function formatCount(n: number | null | undefined, opts?: { precise?: boolean }): string {
-  if (n === null || n === undefined || isNaN(n as number)) return 'Н/Д';
+export function formatCount(n: number | null | undefined, opts?: { precise?: boolean; na?: string }): string {
+  if (n === null || n === undefined || isNaN(n as number)) return opts?.na || 'Н/Д';
   const v = Math.round(n as number);
   if (v >= 1_000_000) return trimDecimal((n as number / 1_000_000).toFixed(2)) + 'M';
   if (v >= 10_000) {
@@ -235,39 +236,53 @@ export function formatCount(n: number | null | undefined, opts?: { precise?: boo
   return v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '\u202F');
 }
 
-function formatVideoDate(d: Date | null): string {
-  if (!d) return 'Н/Д';
+function formatVideoDate(d: Date | null, na: string): string {
+  if (!d) return na;
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${String(d.getFullYear()).slice(-2)}`;
 }
 
-function formatAccountDate(d: Date | null): string {
-  if (!d) return 'Н/Д';
+function formatAccountDate(d: Date | null, na: string): string {
+  if (!d) return na;
   return `${pad(d.getHours())}:${pad(d.getMinutes())} ${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${String(d.getFullYear()).slice(-2)}`;
 }
 
-/** Format the full report message exactly like the requested layout. */
-export function formatAccountReport(info: AccountInfo): string {
+/**
+ * Format the full report message.
+ * Accepts an optional translations object; when omitted, falls back to the
+ * original Ukrainian labels to preserve backward compatibility.
+ */
+export function formatAccountReport(info: AccountInfo, t?: Translations): string {
   const lines: string[] = [];
+  const na = t?.REPORT_NA || 'Н/Д';
+  const labelVideo = t?.REPORT_VIDEO || 'Відео';
+  const labelUploaded = t?.REPORT_UPLOADED || 'Завантажено о';
+  const labelPlatform = t?.REPORT_PLATFORM || 'Платформа';
+  const labelShadowban = t?.REPORT_SHADOWBAN || 'Тіньовий бан';
+  const labelTotalStats = t?.REPORT_TOTAL_STATS || 'Загальна статистика акаунту';
+  const labelFollowers = t?.REPORT_FOLLOWERS || 'підписників';
+  const labelVideos = t?.REPORT_VIDEOS || 'відео';
+
+  const fmtCount = (n: number | null | undefined, precise?: boolean) => formatCount(n, { precise, na });
 
   let idx = 1;
   for (const v of info.videos) {
-    lines.push(`📹 🎞 Відео: ${idx} (${v.url})`);
-    lines.push(`├ Завантажено о: ${formatVideoDate(v.uploadDate)}`);
-    lines.push(`├ Платформа : ${PLATFORM_LABEL[info.platform]}`);
-    lines.push(`├ Тіньовий бан: Н/Д`);
-    lines.push(`└ 👁 : ${formatCount(v.views)} ❤️ : ${formatCount(v.likes)} 💬 : ${formatCount(v.comments)} 📢 : ${formatCount(v.shares)} 💾 : ${formatCount(v.saves)}`);
+    lines.push(`📹 🎞 ${labelVideo}: ${idx} (${v.url})`);
+    lines.push(`├ ${labelUploaded}: ${formatVideoDate(v.uploadDate, na)}`);
+    lines.push(`├ ${labelPlatform} : ${PLATFORM_LABEL[info.platform]}`);
+    lines.push(`├ ${labelShadowban}: ${na}`);
+    lines.push(`└ 👁 : ${fmtCount(v.views)} ❤️ : ${fmtCount(v.likes)} 💬 : ${fmtCount(v.comments)} 📢 : ${fmtCount(v.shares)} 💾 : ${fmtCount(v.saves)}`);
     lines.push('');
     idx++;
   }
 
   const handle = info.username.startsWith('@') || info.platform !== 'tiktok' ? info.username : `@${info.username}`;
-  lines.push(`🌸 Загальна статистика акаунту:`);
+  lines.push(`🌸 ${labelTotalStats}:`);
   lines.push(`${handle} (${info.url})${info.verified ? ' ✓' : ''} | ${PLATFORM_LABEL[info.platform]}`);
-  lines.push(`├ 👁 : ${formatCount(info.totalViews)} ❤️ : ${formatCount(info.totalLikes)} 💬 : ${formatCount(info.totalComments)}`);
-  lines.push(`├ 📢 : ${formatCount(info.totalShares)} 💾 : ${formatCount(info.totalSaves)} ⚠️ : 0`);
-  lines.push(`├ 📅 : ${formatAccountDate(info.createdAt)}`);
-  lines.push(`├ 👥 : ${formatCount(info.followers, { precise: true })} підписників`);
-  lines.push(`└ 📹 : ${info.videoCount !== null ? formatCount(info.videoCount) : 'Н/Д'} відео`);
+  lines.push(`├ 👁 : ${fmtCount(info.totalViews)} ❤️ : ${fmtCount(info.totalLikes)} 💬 : ${fmtCount(info.totalComments)}`);
+  lines.push(`├ 📢 : ${fmtCount(info.totalShares)} 💾 : ${fmtCount(info.totalSaves)} ⚠️ : 0`);
+  lines.push(`├ 📅 : ${formatAccountDate(info.createdAt, na)}`);
+  lines.push(`├ 👥 : ${fmtCount(info.followers, true)} ${labelFollowers}`);
+  lines.push(`└ 📹 : ${info.videoCount !== null ? fmtCount(info.videoCount) : na} ${labelVideos}`);
 
   return lines.join('\n');
 }

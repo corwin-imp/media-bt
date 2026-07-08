@@ -11,6 +11,7 @@ import { resolveAudioOnly, extractAudioSegment } from './video-downloader.js';
 import { Storage } from '../storage/storage.js';
 import { writeSimpleSRT } from '../utils/subtitles.js';
 import { settings } from '../config/settings.js';
+import { getT, type Locale } from '../i18n/index.js';
 
 /**
  * Platform presets for "auto mode".
@@ -117,8 +118,10 @@ export async function processTask(
   taskId: string,
   chatId: number,
   bot: TelegramBot,
-  storage: Storage
+  storage: Storage,
+  locale: Locale | null = null
 ): Promise<void> {
+  const t = getT(locale);
   try {
     await storage.updateTaskStatus(taskId, 'processing', {});
     const task = await storage.getTask(taskId);
@@ -127,7 +130,7 @@ export async function processTask(
 
     // Download only mode
     if (mode === 'download_only') {
-      await bot.sendMessage(chatId, 'Готово! Отправляю видео...');
+      await bot.sendMessage(chatId, t.PIPELINE_SENDING_VIDEO);
       try {
         // Telegram Bot API hard limit: 50MB for sending files
         const TELEGRAM_MAX_MB = 50;
@@ -137,18 +140,18 @@ export async function processTask(
         const fileSizeMB = stats.size / (1024 * 1024);
         
         if (fileSizeMB > TELEGRAM_MAX_MB) {
-          await bot.sendMessage(chatId, `❌ Видео слишком большое для Telegram (${fileSizeMB.toFixed(1)}MB, лимит 50MB)`);
+          await bot.sendMessage(chatId, t.PIPELINE_VIDEO_TOO_LARGE(fileSizeMB.toFixed(1)));
         } else {
           // Validate video before sending
           await validateVideo(source);
           
           // Send file path directly - node-telegram-bot-api handles file paths properly
-          await bot.sendVideo(chatId, source, 'Видео скачано без обработки');
-          await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
+          await bot.sendVideo(chatId, source, t.PIPELINE_VIDEO_NO_PROCESSING);
+          await bot.sendMessage(chatId, t.PIPELINE_DONE);
         }
       } catch (error) {
         console.error('Error sending video:', error);
-        await bot.sendMessage(chatId, `❌ Ошибка отправки видео: ${error}`);
+        await bot.sendMessage(chatId, t.PIPELINE_VIDEO_SEND_ERROR(`${error}`));
       } finally {
         // Clean up source video from tmp after sending (regardless of outcome)
         await cleanupFiles([source]);
@@ -159,7 +162,7 @@ export async function processTask(
 
     // Audio only mode
     if (mode === 'audio_only') {
-      await bot.sendMessage(chatId, 'Извлекаю аудио...');
+      await bot.sendMessage(chatId, t.PIPELINE_EXTRACTING_AUDIO);
       let audioPath: string | null = null;
       try {
         audioPath = await resolveAudioOnly(task.sourceUrl || null, source || null);
@@ -169,16 +172,16 @@ export async function processTask(
         const fileSizeMB = stats.size / (1024 * 1024);
         
         if (fileSizeMB > 50) {
-          await bot.sendMessage(chatId, `❌ Аудио слишком большое для отправки (${fileSizeMB.toFixed(1)}MB)`);
+          await bot.sendMessage(chatId, t.PIPELINE_AUDIO_TOO_LARGE(fileSizeMB.toFixed(1)));
         } else {
           // Use stream instead of buffer to avoid memory issues
           const audioStream = createReadStream(audioPath);
-          await bot.sendAudio(chatId, audioStream, 'Аудио извлечено в MP3');
-          await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
+          await bot.sendAudio(chatId, audioStream, t.PIPELINE_AUDIO_EXTRACTED);
+          await bot.sendMessage(chatId, t.PIPELINE_DONE);
         }
       } catch (error) {
         console.error('Error sending audio:', error);
-        await bot.sendMessage(chatId, `❌ Ошибка отправки аудио: ${error}`);
+        await bot.sendMessage(chatId, t.PIPELINE_AUDIO_SEND_ERROR(`${error}`));
       } finally {
         // Clean up extracted audio and source video from tmp after sending
         await cleanupFiles([audioPath, source]);
@@ -204,7 +207,7 @@ export async function processTask(
       });
       
       if (segStartTime === null || segStartTime === undefined || segEndTime === null || segEndTime === undefined) {
-        await bot.sendMessage(chatId, '❌ Ошибка: не указан временной интервал для извлечения аудио.');
+        await bot.sendMessage(chatId, t.PIPELINE_SEGMENT_NO_TIME);
         await storage.updateTaskStatus(taskId, 'failed', {});
         return;
       }
@@ -212,7 +215,7 @@ export async function processTask(
       // Validate source path exists and is a proper string
       if (!source || typeof source !== 'string' || source.trim() === '') {
         console.error('Invalid source path for audio extraction:', { source, type: typeof source, constructor: source?.constructor?.name });
-        await bot.sendMessage(chatId, '❌ Ошибка: исходный файл не найден. Возможно, видео не было загружено. Попробуйте отправить видео заново.');
+        await bot.sendMessage(chatId, t.PIPELINE_SOURCE_NOT_FOUND);
         await storage.updateTaskStatus(taskId, 'failed', {});
         return;
       }
@@ -222,7 +225,7 @@ export async function processTask(
         await fs.access(source);
       } catch {
         console.error('Source file not found:', source);
-        await bot.sendMessage(chatId, '❌ Ошибка: файл видео не найден. Возможно, он был удален. Попробуйте отправить видео заново.');
+        await bot.sendMessage(chatId, t.PIPELINE_FILE_NOT_FOUND);
         await storage.updateTaskStatus(taskId, 'failed', {});
         return;
       }
@@ -233,7 +236,7 @@ export async function processTask(
         return mins + ':' + secs.toString().padStart(2, '0');
       };
       
-      await bot.sendMessage(chatId, '🎵 Извлекаю аудио из интервала ' + formatTime(segStartTime) + ' - ' + formatTime(segEndTime) + '...');
+      await bot.sendMessage(chatId, t.PIPELINE_EXTRACTING_SEGMENT(formatTime(segStartTime), formatTime(segEndTime)));
       let audioPath: string | null = null;
       try {
         audioPath = await extractAudioSegment(source, segStartTime, segEndTime, settings.TMP_DIR);
@@ -242,15 +245,15 @@ export async function processTask(
         const fileSizeMB = stats.size / (1024 * 1024);
         
         if (fileSizeMB > 50) {
-          await bot.sendMessage(chatId, '❌ Аудио слишком большое (' + fileSizeMB.toFixed(1) + 'MB)');
+          await bot.sendMessage(chatId, t.PIPELINE_SEGMENT_TOO_LARGE(fileSizeMB.toFixed(1)));
         } else {
           const audioStream = createReadStream(audioPath);
-          await bot.sendAudio(chatId, audioStream, 'Аудио извлечено из интервала ' + formatTime(segStartTime) + '-' + formatTime(segEndTime));
-          await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
+          await bot.sendAudio(chatId, audioStream, t.PIPELINE_SEGMENT_EXTRACTED(formatTime(segStartTime), formatTime(segEndTime)));
+          await bot.sendMessage(chatId, t.PIPELINE_DONE);
         }
       } catch (error) {
         console.error('Error extracting audio segment:', error);
-        await bot.sendMessage(chatId, '❌ Ошибка извлечения аудио: ' + error);
+        await bot.sendMessage(chatId, t.PIPELINE_SEGMENT_ERROR(`${error}`));
       } finally {
         await cleanupFiles([audioPath, source]);
       }
@@ -289,7 +292,7 @@ export async function processTask(
         : 'OpenCV';
       await bot.sendMessage(
         chatId,
-        `🎬 Анализирую видео для поиска лучших моментов (${backendLabel}). Это займёт немного времени...`
+        t.PIPELINE_ANALYZING(backendLabel)
       );
       const minDur = preset ? preset.minDuration : 15;
       const maxDur = preset ? preset.maxDuration : 25;
@@ -339,7 +342,7 @@ export async function processTask(
 
     await storage.updateTaskStatus(taskId, 'done', {});
     const results = await storage.getResults(taskId);
-    await bot.sendMessage(chatId, 'Готово! Отправляю клипы...');
+    await bot.sendMessage(chatId, t.PIPELINE_SENDING_CLIPS);
     
     let successCount = 0;
     const clipsToCleanup: string[] = [];
@@ -357,7 +360,7 @@ export async function processTask(
         const fileSizeMB = stats.size / (1024 * 1024);
         
         if (fileSizeMB > TELEGRAM_MAX_MB) {
-          await bot.sendMessage(chatId, `⚠️ Клип слишком большой для Telegram (${fileSizeMB.toFixed(1)}MB, лимит 50MB): ${result.caption}`);
+          await bot.sendMessage(chatId, t.PIPELINE_CLIP_TOO_LARGE(fileSizeMB.toFixed(1), result.caption));
           console.warn(`Clip too large for Telegram: ${result.clipPath} (${fileSizeMB.toFixed(1)}MB)`);
           clipsToCleanup.push(result.clipPath);
           continue;
@@ -373,7 +376,7 @@ export async function processTask(
         clipsToCleanup.push(result.clipPath);
       } catch (error) {
         console.error('Error processing clip:', error);
-        await bot.sendMessage(chatId, `❌ Ошибка отправки клипа: ${error}`).catch(sendErr => {
+        await bot.sendMessage(chatId, t.PIPELINE_CLIP_SEND_ERROR(`${error}`)).catch(sendErr => {
           console.error('Failed to send error message:', sendErr);
         });
       }
@@ -387,15 +390,15 @@ export async function processTask(
     await cleanupDirectory(outDir);
     
     if (successCount === 0 && results.length > 0) {
-      await bot.sendMessage(chatId, '❌ Не удалось отправить ни один клип. Проверьте логи для деталей.');
+      await bot.sendMessage(chatId, t.PIPELINE_NO_CLIPS_SENT);
     } else if (successCount < results.length) {
-      await bot.sendMessage(chatId, `✅ Отправлено ${successCount} из ${results.length} клипов. Напишите /start, чтобы создать новое видео.`);
+      await bot.sendMessage(chatId, t.PIPELINE_PARTIAL_SUCCESS(successCount, results.length));
     } else {
-      await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
+      await bot.sendMessage(chatId, t.PIPELINE_DONE);
     }
   } catch (error) {
     await storage.updateTaskStatus(taskId, 'failed', { error: String(error) });
-    await bot.sendMessage(chatId, `Ошибка при обработке задачи: ${error}`);
+    await bot.sendMessage(chatId, t.PIPELINE_TASK_ERROR(`${error}`));
   }
 }
 

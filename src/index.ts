@@ -6,7 +6,7 @@ import { processTask } from './services/pipeline.js';
 import { resolveSourceWithQuality } from './services/video-downloader.js';
 import { fetchTrendingHashtags } from './services/trends.js';
 import { parseAccountInput, fetchAccount, formatAccountReport } from './services/account-viewer.js';
-import { ru } from './i18n/ru.js';
+import { getT, translations, DEFAULT_LOCALE, type Locale } from './i18n/index.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createWriteStream, createReadStream, statSync } from 'fs';
@@ -15,6 +15,7 @@ setupLogging(settings.DEBUG);
 const bot = new TelegramBot(settings.TELEGRAM_TOKEN, { polling: true });
 const storage = await SQLiteStorage.create(settings.DB_PATH);
 const sessions = new Map<number, SessionData>();
+const userLocales = new Map<number, Locale>();
 
 interface SessionData {
   sourcePath?: string;
@@ -38,11 +39,13 @@ interface SessionData {
  * Platform presets for "auto mode" (UI side). Mirrors pipeline.ts presets so
  * that selecting a platform here applies the right defaults immediately.
  */
-const PLATFORM_PRESETS: Record<string, { label: string; clipCount: number }> = {
-  tiktok: { label: ru.PLATFORM_TIKTOK, clipCount: 3 },
-  shorts: { label: ru.PLATFORM_SHORTS, clipCount: 3 },
-  reels: { label: ru.PLATFORM_REELS, clipCount: 3 }
-};
+function getPlatformPresets(t: typeof translations[Locale]) {
+  return {
+    tiktok: { label: t.PLATFORM_TIKTOK, clipCount: 3 },
+    shorts: { label: t.PLATFORM_SHORTS, clipCount: 3 },
+    reels: { label: t.PLATFORM_REELS, clipCount: 3 }
+  } as const;
+}
 
 enum State {
   SOURCE = 1,
@@ -60,39 +63,59 @@ enum State {
 const userStates = new Map<number, State>();
 const menuMessages = new Map<number, number>();
 
-function getTrimButtonText(session: SessionData): string {
-  if (!session.trimMode) return '✂️ Обрезка';
+/** Get the user's locale, falling back to the default. */
+function getLocale(chatId: number): Locale {
+  return userLocales.get(chatId) || DEFAULT_LOCALE;
+}
+
+/** Get translations for a chat. */
+function getChatT(chatId: number) {
+  return getT(getLocale(chatId));
+}
+
+function getTrimButtonText(t: ReturnType<typeof getT>, session: SessionData): string {
+  if (!session.trimMode) return t.TRIM_BUTTON;
   if (session.trimMode === 'top_moments') {
-    return `✂️ Обрезка: Топ моменты (${session.clipCount || 3} клипов) ✓`;
+    return t.TRIM_TOP_MOMENTS_BTN(session.clipCount || 3);
   }
   if (session.trimMode === 'custom_segment') {
     const start = session.startTime ? formatSecondsToTime(session.startTime) : '?';
     const end = session.endTime ? formatSecondsToTime(session.endTime) : '?';
-    return `✂️ Обрезка: Интервал ${start}-${end} ✓`;
+    return t.TRIM_CUSTOM_SEGMENT_BTN(start, end);
   }
-  return '✂️ Обрезка';
+  return t.TRIM_BUTTON;
 }
 
-function getAudioButtonText(session: SessionData): string {
-  return session.audioOnly ? '🎵 Только звук в MP3 ✓' : '🎵 Только звук в MP3';
+function getAudioButtonText(t: ReturnType<typeof getT>, session: SessionData): string {
+  return session.audioOnly ? t.AUDIO_ONLY_ENABLED : t.AUDIO_ONLY_DISABLED;
 }
 
-function getMusicButtonText(session: SessionData): string {
-  return session.mp3Path ? '🎵 Аудиозапись: Заменена ✓' : '🎵 Поменять аудиозапись';
+function getMusicButtonText(t: ReturnType<typeof getT>, session: SessionData): string {
+  return session.mp3Path ? t.MUSIC_REPLACED : t.MUSIC_CHANGE;
 }
 
-function getSpeedButtonText(session: SessionData): string {
+function getAudioMenuButtonText(t: ReturnType<typeof getT>, session: SessionData): string {
+  // When "Only sound in MP3" (audioOnly) is selected, show headphones icon
+  // to indicate there will be no video in the output.
+  if (session.audioOnly) return t.AUDIO_MENU_HEADPHONES;
+  if (session.mp3Path) return t.AUDIO_MENU_MUSIC;
+  return t.AUDIO_MENU_DEFAULT;
+}
+
+function getSpeedButtonText(t: ReturnType<typeof getT>, session: SessionData): string {
   const speed = session.playbackSpeed && Math.abs(session.playbackSpeed - 1) >= 0.001
     ? session.playbackSpeed
     : 1;
-  return `⚡️ Скорость: ${speed}x`;
+  return t.SPEED_BUTTON(speed);
 }
 
-function getAutoModeButtonText(session: SessionData): string {
-  if (session.platform && PLATFORM_PRESETS[session.platform]) {
-    return `🎯 Авто режим: ${PLATFORM_PRESETS[session.platform].label} ✓`;
+function getAutoModeButtonText(t: ReturnType<typeof getT>, session: SessionData): string {
+  if (session.platform) {
+    const presets = getPlatformPresets(t);
+    const preset = (presets as any)[session.platform];
+    if (preset) return t.AUTO_MODE_SELECTED_PLATFORM(preset.label);
   }
-  return '🎯 Авто режим';
+  return t.AUTO_MODE_DEFAULT;
 }
 
 function formatSecondsToTime(seconds: number): string {
@@ -102,16 +125,15 @@ function formatSecondsToTime(seconds: number): string {
 }
 
 async function showMainMenu(chatId: number, session: SessionData, editMessageId?: number): Promise<void> {
-  const text = '🎬 *Настройки обработки видео*\n\nВыберите параметры:';
+  const t = getChatT(chatId);
+  const text = t.MAIN_MENU_TITLE;
   const keyboard: TelegramBot.InlineKeyboardMarkup = {
     inline_keyboard: [
-      [{ text: getAutoModeButtonText(session), callback_data: 'auto_mode' }],
-      [{ text: getTrimButtonText(session), callback_data: 'trim_menu' }],
-      [{ text: getAudioButtonText(session), callback_data: 'toggle_audio' }],
-      [{ text: getSpeedButtonText(session), callback_data: 'speed_menu' }],
-      [{ text: '🏷️ Посмотреть теги', callback_data: 'view_tags' }],
-      [{ text: getMusicButtonText(session), callback_data: 'change_music' }],
-      [{ text: '🚀 Загрузить', callback_data: 'start_upload' }]
+      [{ text: getAutoModeButtonText(t, session), callback_data: 'auto_mode' }],
+      [{ text: getTrimButtonText(t, session), callback_data: 'trim_menu' }],
+      [{ text: getAudioMenuButtonText(t, session), callback_data: 'audio_menu' }],
+      [{ text: getSpeedButtonText(t, session), callback_data: 'speed_menu' }],
+      [{ text: t.UPLOAD_BUTTON, callback_data: 'start_upload' }]
     ]
   };
   if (editMessageId) {
@@ -129,15 +151,38 @@ async function showMainMenu(chatId: number, session: SessionData, editMessageId?
 }
 
 async function showTrimMenu(chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
   const messageId = menuMessages.get(chatId);
-  const text = '✂️ *Выберите тип обрезки:*';
-  let topMomentsText = session.trimMode === 'top_moments' ? '🎯 Топ моменты ✓' : '🎯 Топ моменты';
-  let customSegmentText = session.trimMode === 'custom_segment' ? '✂️ Определенный кусок ✓' : '✂️ Определенный кусок';
+  const text = t.TRIM_MENU_TITLE;
+  const topMomentsText = session.trimMode === 'top_moments' ? t.TRIM_TOP_MOMENTS_CHECKED : t.TRIM_TOP_MOMENTS;
+  const customSegmentText = session.trimMode === 'custom_segment' ? t.TRIM_CUSTOM_SEGMENT_CHECKED : t.TRIM_CUSTOM_SEGMENT;
   const keyboard: TelegramBot.InlineKeyboardMarkup = {
     inline_keyboard: [
       [{ text: topMomentsText, callback_data: 'trim_top_moments' }],
       [{ text: customSegmentText, callback_data: 'trim_custom_segment' }],
-      [{ text: '◀️ Назад', callback_data: 'back_to_main' }]
+      [{ text: t.BACK_BUTTON, callback_data: 'back_to_main' }]
+    ]
+  };
+  if (messageId) {
+    try {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: keyboard });
+    } catch {
+      const msg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
+      menuMessages.set(chatId, msg.message_id);
+    }
+  }
+  sessions.set(chatId, session);
+}
+
+async function showAudioMenu(chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
+  const messageId = menuMessages.get(chatId);
+  const text = t.AUDIO_MENU_TITLE;
+  const keyboard: TelegramBot.InlineKeyboardMarkup = {
+    inline_keyboard: [
+      [{ text: getMusicButtonText(t, session), callback_data: 'change_music' }],
+      [{ text: getAudioButtonText(t, session), callback_data: 'toggle_audio' }],
+      [{ text: t.BACK_BUTTON, callback_data: 'back_to_main' }]
     ]
   };
   if (messageId) {
@@ -152,44 +197,45 @@ async function showTrimMenu(chatId: number, session: SessionData): Promise<void>
 }
 
 async function showTagsMenu(chatId: number, session: SessionData): Promise<void> {
-  const messageId = menuMessages.get(chatId);
-  const text = '🏷️ *Хотите подсмотреть тренды для хэштегов?*';
+  const t = getChatT(chatId);
+  const text = t.TAGS_MENU_TITLE;
   const keyboard: TelegramBot.InlineKeyboardMarkup = {
     inline_keyboard: [
-      [{ text: '✅ Да, показать тренды', callback_data: 'tags_yes' }],
-      [{ text: '❌ Нет, пропустить', callback_data: 'tags_no' }]
+      [{ text: t.TAGS_YES, callback_data: 'tags_yes' }],
+      [{ text: t.TAGS_NO, callback_data: 'tags_no' }]
     ]
   };
-  if (messageId) {
-    try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: keyboard });
-    } catch {
-      const msg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
-      menuMessages.set(chatId, msg.message_id);
-    }
-  }
+  const msg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
   sessions.set(chatId, session);
 }
 
+async function showLanguageMenu(chatId: number): Promise<void> {
+  const t = getChatT(chatId);
+  const current = getLocale(chatId);
+  const keyboard: TelegramBot.InlineKeyboardMarkup = {
+    inline_keyboard: [
+      [{ text: current === 'ru' ? `${t.LANG_RUSSIAN} ✓` : t.LANG_RUSSIAN, callback_data: 'lang_ru' }],
+      [{ text: current === 'en' ? `${t.LANG_ENGLISH} ✓` : t.LANG_ENGLISH, callback_data: 'lang_en' }]
+    ]
+  };
+  await bot.sendMessage(chatId, t.LANG_TITLE, { parse_mode: 'Markdown', reply_markup: keyboard });
+}
+
 async function showAutoModeMenu(chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
   const messageId = menuMessages.get(chatId);
-  const text = ru.AUTO_MODE_TITLE;
-  const tiktokText = session.platform === 'tiktok'
-    ? `${PLATFORM_PRESETS.tiktok.label} ✓`
-    : PLATFORM_PRESETS.tiktok.label;
-  const shortsText = session.platform === 'shorts'
-    ? `${PLATFORM_PRESETS.shorts.label} ✓`
-    : PLATFORM_PRESETS.shorts.label;
-  const reelsText = session.platform === 'reels'
-    ? `${PLATFORM_PRESETS.reels.label} ✓`
-    : PLATFORM_PRESETS.reels.label;
+  const text = t.AUTO_MODE_TITLE;
+  const presets = getPlatformPresets(t);
+  const tiktokText = session.platform === 'tiktok' ? `${presets.tiktok.label} ✓` : presets.tiktok.label;
+  const shortsText = session.platform === 'shorts' ? `${presets.shorts.label} ✓` : presets.shorts.label;
+  const reelsText = session.platform === 'reels' ? `${presets.reels.label} ✓` : presets.reels.label;
   const keyboard: TelegramBot.InlineKeyboardMarkup = {
     inline_keyboard: [
       [{ text: `🎵 ${tiktokText}`, callback_data: 'auto_tiktok' }],
       [{ text: `▶️ ${shortsText}`, callback_data: 'auto_shorts' }],
       [{ text: `📸 ${reelsText}`, callback_data: 'auto_reels' }],
-      [{ text: '❌ Выключить авто режим', callback_data: 'auto_off' }],
-      [{ text: '◀️ Назад', callback_data: 'back_to_main' }]
+      [{ text: t.AUTO_MODE_OFF, callback_data: 'auto_off' }],
+      [{ text: t.BACK_BUTTON, callback_data: 'back_to_main' }]
     ]
   };
   if (messageId) {
@@ -204,8 +250,9 @@ async function showAutoModeMenu(chatId: number, session: SessionData): Promise<v
 }
 
 async function startUpload(chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
   if (!session.trimMode && !session.audioOnly) {
-    await bot.sendMessage(chatId, '⚠️ Пожалуйста, выберите режим обрезки или включите "Только звук в MP3".');
+    await bot.sendMessage(chatId, t.TRIM_REQUIRED);
     await showMainMenu(chatId, session, menuMessages.get(chatId));
     return;
   }
@@ -225,13 +272,13 @@ async function startUpload(chatId: number, session: SessionData): Promise<void> 
   if (session.audioOnly && session.trimMode === 'custom_segment') {
     if (!session.sourcePath || typeof session.sourcePath !== 'string' || session.sourcePath.trim() === '') {
       console.error('ERROR: sourcePath is invalid for audio_from_segment mode:', session.sourcePath);
-      await bot.sendMessage(chatId, '❌ Ошибка: видео не было загружено. Пожалуйста, сначала отправьте видео или ссылку, выберите качество, а затем настройте параметры.');
+      await bot.sendMessage(chatId, t.SOURCE_INVALID);
       userStates.set(chatId, State.MAIN_MENU);
       return;
     }
   }
   
-  await bot.sendMessage(chatId, ru.PROCESSING_START);
+  await bot.sendMessage(chatId, t.PROCESSING_START);
   userStates.set(chatId, State.PROCESSING);
   
   // Determine mode based on combination of settings
@@ -262,7 +309,7 @@ async function startUpload(chatId: number, session: SessionData): Promise<void> 
   });
   
   const botWrapper = new TelegramBotWrapper(bot);
-  processTask(taskId, chatId, botWrapper, storage).catch(error => console.error('Processing error:', error));
+  processTask(taskId, chatId, botWrapper, storage, getLocale(chatId)).catch(error => console.error('Processing error:', error));
   setTimeout(() => showMainMenu(chatId, session, menuMessages.get(chatId)), 2000);
 }
 
@@ -272,6 +319,7 @@ bot.on('callback_query', async (query) => {
   if (!chatId) return;
   const data = query.data;
   const session = sessions.get(chatId) || {};
+  const t = getChatT(chatId);
 
   try {
     if (!data) {
@@ -282,63 +330,72 @@ bot.on('callback_query', async (query) => {
       case 'auto_mode':
         await showAutoModeMenu(chatId, session);
         break;
-      case 'auto_tiktok':
+      case 'auto_tiktok': {
+        const presets = getPlatformPresets(t);
         session.platform = 'tiktok';
         // Auto mode selects top_moments + sensible clip count for the platform
         session.trimMode = 'top_moments';
         session.audioOnly = false;
-        if (!session.clipCount) session.clipCount = PLATFORM_PRESETS.tiktok.clipCount;
-        await bot.sendMessage(chatId, ru.AUTO_MODE_SELECTED(PLATFORM_PRESETS.tiktok.label));
+        if (!session.clipCount) session.clipCount = presets.tiktok.clipCount;
+        await bot.sendMessage(chatId, t.AUTO_MODE_SELECTED(presets.tiktok.label));
         await showMainMenu(chatId, session, menuMessages.get(chatId));
         break;
-      case 'auto_shorts':
+      }
+      case 'auto_shorts': {
+        const presets = getPlatformPresets(t);
         session.platform = 'shorts';
         session.trimMode = 'top_moments';
         session.audioOnly = false;
-        if (!session.clipCount) session.clipCount = PLATFORM_PRESETS.shorts.clipCount;
-        await bot.sendMessage(chatId, ru.AUTO_MODE_SELECTED(PLATFORM_PRESETS.shorts.label));
+        if (!session.clipCount) session.clipCount = presets.shorts.clipCount;
+        await bot.sendMessage(chatId, t.AUTO_MODE_SELECTED(presets.shorts.label));
         await showMainMenu(chatId, session, menuMessages.get(chatId));
         break;
-      case 'auto_reels':
+      }
+      case 'auto_reels': {
+        const presets = getPlatformPresets(t);
         session.platform = 'reels';
         session.trimMode = 'top_moments';
         session.audioOnly = false;
-        if (!session.clipCount) session.clipCount = PLATFORM_PRESETS.reels.clipCount;
-        await bot.sendMessage(chatId, ru.AUTO_MODE_SELECTED(PLATFORM_PRESETS.reels.label));
+        if (!session.clipCount) session.clipCount = presets.reels.clipCount;
+        await bot.sendMessage(chatId, t.AUTO_MODE_SELECTED(presets.reels.label));
         await showMainMenu(chatId, session, menuMessages.get(chatId));
         break;
+      }
       case 'auto_off':
         session.platform = null;
-        await bot.sendMessage(chatId, ru.AUTO_MODE_CLEARED);
+        await bot.sendMessage(chatId, t.AUTO_MODE_CLEARED);
         await showMainMenu(chatId, session, menuMessages.get(chatId));
         break;
       case 'trim_menu':
         await showTrimMenu(chatId, session);
         break;
+      case 'audio_menu':
+        await showAudioMenu(chatId, session);
+        break;
       case 'trim_top_moments':
         session.trimMode = 'top_moments';
         // НЕ сбрасываем audioOnly - сохраняем оба состояния независимо
-        await bot.sendMessage(chatId, ru.ASK_CLIP_COUNT);
+        await bot.sendMessage(chatId, t.ASK_CLIP_COUNT);
         userStates.set(chatId, State.CLIP_COUNT_INPUT);
         sessions.set(chatId, session);
         break;
       case 'trim_custom_segment':
         session.trimMode = 'custom_segment';
         // НЕ сбрасываем audioOnly - сохраняем оба состояния независимо
-        await bot.sendMessage(chatId, ru.ASK_CUSTOM_SEGMENT);
+        await bot.sendMessage(chatId, t.ASK_CUSTOM_SEGMENT);
         userStates.set(chatId, State.SEGMENT_INPUT);
         sessions.set(chatId, session);
         break;
       case 'toggle_audio':
         session.audioOnly = !session.audioOnly;
         // НЕ сбрасываем trimMode - сохраняем оба состояния независимо
-        await showMainMenu(chatId, session, menuMessages.get(chatId));
+        await showAudioMenu(chatId, session);
         break;
       case 'speed_menu': {
         const current = session.playbackSpeed && Math.abs(session.playbackSpeed - 1) >= 0.001
           ? session.playbackSpeed
           : 1;
-        await bot.sendMessage(chatId, ru.ASK_PLAYBACK_SPEED.replace('{current}', `${current}x`));
+        await bot.sendMessage(chatId, t.ASK_PLAYBACK_SPEED.replace('{current}', `${current}x`), { parse_mode: 'Markdown' });
         userStates.set(chatId, State.SPEED_INPUT);
         sessions.set(chatId, session);
         break;
@@ -347,7 +404,7 @@ bot.on('callback_query', async (query) => {
         await showTagsMenu(chatId, session);
         break;
       case 'change_music':
-        await bot.sendMessage(chatId, ru.ASK_MUSIC);
+        await bot.sendMessage(chatId, t.ASK_MUSIC);
         userStates.set(chatId, State.MUSIC_INPUT);
         sessions.set(chatId, session);
         break;
@@ -355,19 +412,30 @@ bot.on('callback_query', async (query) => {
         await startUpload(chatId, session);
         break;
       case 'accounts':
-        await bot.sendMessage(chatId, ru.ACCOUNTS_PROMPT, { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, t.ACCOUNTS_PROMPT, { parse_mode: 'Markdown' });
         userStates.set(chatId, State.ACCOUNT_INPUT);
         break;
+      case 'lang_ru':
+        userLocales.set(chatId, 'ru');
+        await bot.answerCallbackQuery(query.id, { text: translations.ru.LANG_SELECTED(translations.ru.LANG_RUSSIAN) });
+        await showLanguageMenu(chatId);
+        return;
+      case 'lang_en':
+        userLocales.set(chatId, 'en');
+        await bot.answerCallbackQuery(query.id, { text: translations.en.LANG_SELECTED(translations.en.LANG_ENGLISH) });
+        await showLanguageMenu(chatId);
+        return;
       case 'back_to_main':
         await showMainMenu(chatId, session, menuMessages.get(chatId));
         break;
-      case 'tags_yes':
+      case 'tags_yes': {
         const trends = await fetchTrendingHashtags(5);
         session.trendChoice = trends[0];
-        const formatted = trends.map((t, i) => `${i + 1}) ${t}`).join('\n');
-        await bot.sendMessage(chatId, `🏷️ *Топ трендов:*\n${formatted}`, { parse_mode: 'Markdown' });
+        const formatted = trends.map((tr, i) => `${i + 1}) ${tr}`).join('\n');
+        await bot.sendMessage(chatId, t.TAGS_TOP_TRENDS(formatted), { parse_mode: 'Markdown' });
         await showMainMenu(chatId, session, menuMessages.get(chatId));
         break;
+      }
       case 'tags_no':
         session.trendChoice = null;
         await showMainMenu(chatId, session, menuMessages.get(chatId));
@@ -376,7 +444,7 @@ bot.on('callback_query', async (query) => {
     await bot.answerCallbackQuery(query.id);
   } catch (error) {
     console.error('Callback query error:', error);
-    await bot.answerCallbackQuery(query.id, { text: 'Произошла ошибка' });
+    await bot.answerCallbackQuery(query.id, { text: t.CALLBACK_ERROR });
   }
 });
 
@@ -386,42 +454,76 @@ function resetSession(chatId: number): void {
   menuMessages.delete(chatId);
 }
 
-bot.onText(/\/start/, async (msg) => {
-  const chatId = msg.chat.id;
+/**
+ * Show the welcome/start message and reset the session.
+ * Triggered by /start command or the "🏠 Начало" persistent button.
+ */
+async function doStart(chatId: number): Promise<void> {
+  const t = getChatT(chatId);
   const keyboard = {
-    keyboard: [[{ text: ru.ACCOUNTS_BUTTON }]],
+    keyboard: [
+      [{ text: t.START_BUTTON }, { text: t.ACCOUNTS_BUTTON }, { text: t.TAGS_BUTTON }],
+      [{ text: t.LANG_BUTTON }]
+    ],
     resize_keyboard: true
   };
-  await bot.sendMessage(chatId, ru.START, { reply_markup: keyboard as any });
+  userStates.delete(chatId);
+  sessions.delete(chatId);
+  menuMessages.delete(chatId);
+  await bot.sendMessage(chatId, t.START, { reply_markup: keyboard as any });
   userStates.set(chatId, State.SOURCE);
+}
+
+bot.onText(/\/start/, async (msg) => {
+  await doStart(msg.chat.id);
 });
 
 bot.onText(/\/accounts/, async (msg) => {
   const chatId = msg.chat.id;
-  await bot.sendMessage(chatId, ru.ACCOUNTS_PROMPT, { parse_mode: 'Markdown' });
+  const t = getChatT(chatId);
+  await bot.sendMessage(chatId, t.ACCOUNTS_PROMPT, { parse_mode: 'Markdown' });
   userStates.set(chatId, State.ACCOUNT_INPUT);
 });
 
 bot.onText(/\/help/, async (msg) => {
   const chatId = msg.chat.id;
-  await bot.sendMessage(chatId, ru.HELP.replace('{max_mb}', settings.MAX_SOURCE_MB.toString()));
+  const t = getChatT(chatId);
+  await bot.sendMessage(chatId, t.HELP.replace('{max_mb}', settings.MAX_SOURCE_MB.toString()));
 });
 
 bot.onText(/\/cancel/, async (msg) => {
   const chatId = msg.chat.id;
-  await bot.sendMessage(chatId, ru.CANCELLED);
+  const t = getChatT(chatId);
+  await bot.sendMessage(chatId, t.CANCELLED);
   userStates.delete(chatId);
   sessions.delete(chatId);
   menuMessages.delete(chatId);
 });
 
+bot.onText(/\/lang/, async (msg) => {
+  await showLanguageMenu(msg.chat.id);
+});
+
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text?.trim();
-  // Handle the persistent keyboard "Accounts" button from any state
-  if (text === ru.ACCOUNTS_BUTTON) {
-    await bot.sendMessage(chatId, ru.ACCOUNTS_PROMPT, { parse_mode: 'Markdown' });
+  const t = getChatT(chatId);
+  // Handle the persistent keyboard buttons from any state
+  if (text === t.START_BUTTON) {
+    await doStart(chatId);
+    return;
+  }
+  if (text === t.ACCOUNTS_BUTTON) {
+    await bot.sendMessage(chatId, t.ACCOUNTS_PROMPT, { parse_mode: 'Markdown' });
     userStates.set(chatId, State.ACCOUNT_INPUT);
+    return;
+  }
+  if (text === t.TAGS_BUTTON) {
+    await showTagsMenu(chatId, sessions.get(chatId) || {});
+    return;
+  }
+  if (text === t.LANG_BUTTON) {
+    await showLanguageMenu(chatId);
     return;
   }
   const state = userStates.get(chatId);
@@ -439,15 +541,16 @@ bot.on('message', async (msg) => {
       case State.ACCOUNT_INPUT: await handleAccountInput(msg, chatId); break;
     }
   } catch (error) {
-    await bot.sendMessage(chatId, `${ru.ERROR_GENERIC}: ${error}`);
+    await bot.sendMessage(chatId, `${t.ERROR_GENERIC}: ${error}`);
   }
 });
 
 bot.on('video', async (msg) => {
   const chatId = msg.chat.id;
+  const t = getChatT(chatId);
   const state = userStates.get(chatId);
   if (state === State.PROCESSING) {
-    await bot.sendMessage(chatId, '⏳ Уже обрабатываю другое видео. Пожалуйста, подождите.');
+    await bot.sendMessage(chatId, t.ALREADY_PROCESSING);
     return;
   }
   resetSession(chatId);
@@ -455,10 +558,10 @@ bot.on('video', async (msg) => {
   const video = msg.video;
   if (!video) return;
   if (video.file_size && video.file_size > settings.MAX_SOURCE_MB * 1024 * 1024) {
-    await bot.sendMessage(chatId, ru.TOO_LARGE.replace('{max_mb}', settings.MAX_SOURCE_MB.toString()));
+    await bot.sendMessage(chatId, t.TOO_LARGE.replace('{max_mb}', settings.MAX_SOURCE_MB.toString()));
     return;
   }
-  await bot.sendMessage(chatId, '📁 Видео получено. Скачиваю...');
+  await bot.sendMessage(chatId, t.VIDEO_RECEIVED_DOWNLOADING);
   try {
     const fileLink = await bot.getFileLink(video.file_id);
     const fileName = `source_${chatId}_${Date.now()}.mp4`;
@@ -468,17 +571,18 @@ bot.on('video', async (msg) => {
     await fs.writeFile(filePath, buffer);
     session.sourcePath = filePath;
     sessions.set(chatId, session);
-    await bot.sendMessage(chatId, ru.SOURCE_RECEIVED);
+    await bot.sendMessage(chatId, t.SOURCE_RECEIVED);
     await showMainMenu(chatId, session);
     userStates.set(chatId, State.MAIN_MENU);
     sessions.set(chatId, session);
   } catch (error) {
-    await bot.sendMessage(chatId, `${ru.ERROR_GENERIC}: ${error}`);
+    await bot.sendMessage(chatId, `${t.ERROR_GENERIC}: ${error}`);
   }
 });
 
 bot.on('audio', async (msg) => {
   const chatId = msg.chat.id;
+  const t = getChatT(chatId);
   const state = userStates.get(chatId);
   const session = sessions.get(chatId) || {};
   if (state !== State.MUSIC_INPUT) return;
@@ -493,55 +597,58 @@ bot.on('audio', async (msg) => {
     await fs.writeFile(filePath, buffer);
     session.mp3Path = filePath;
     sessions.set(chatId, session);
-    await bot.sendMessage(chatId, ru.MUSIC_RECEIVED);
-    await bot.sendMessage(chatId, ru.ASK_AUDIO_SEGMENT);
+    await bot.sendMessage(chatId, t.MUSIC_RECEIVED);
+    await bot.sendMessage(chatId, t.ASK_AUDIO_SEGMENT);
     userStates.set(chatId, State.AUDIO_SEGMENT);
     sessions.set(chatId, session);
   } catch (error) {
-    await bot.sendMessage(chatId, `${ru.ERROR_GENERIC}: ${error}`);
+    await bot.sendMessage(chatId, `${t.ERROR_GENERIC}: ${error}`);
   }
 });
 
 async function handleSource(msg: any, chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
   const text = msg.text?.trim();
   if (!text) return;
   if (!isValidUrl(text)) {
-    await bot.sendMessage(chatId, 'Пожалуйста, отправьте корректную ссылку или видеофайл.');
+    await bot.sendMessage(chatId, t.INVALID_URL);
     return;
   }
   resetSession(chatId);
   const freshSession = sessions.get(chatId) || {};
   freshSession.sourceUrl = text;
-  await bot.sendMessage(chatId, ru.SOURCE_RECEIVED);
-  await bot.sendMessage(chatId, ru.ASK_QUALITY);
+  await bot.sendMessage(chatId, t.SOURCE_RECEIVED);
+  await bot.sendMessage(chatId, t.ASK_QUALITY);
   userStates.set(chatId, State.QUALITY_SELECTION);
   sessions.set(chatId, freshSession);
 }
 
 async function handleQualitySelection(msg: any, chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
   const text = msg.text?.trim();
   const qualityMap: Record<string, number> = { '1080': 1080, '720': 720, '480': 480, '360': 360 };
   const quality = qualityMap[text || ''];
-  if (!quality) { await bot.sendMessage(chatId, ru.INVALID_QUALITY); return; }
+  if (!quality) { await bot.sendMessage(chatId, t.INVALID_QUALITY); return; }
   session.quality = quality;
   try {
-    await bot.sendMessage(chatId, ru.QUALITY_SELECTED.replace('{quality}', quality.toString()));
+    await bot.sendMessage(chatId, t.QUALITY_SELECTED.replace('{quality}', quality.toString()));
     if (session.sourceUrl) {
       session.sourcePath = await resolveSourceWithQuality(session.sourceUrl, quality);
-      await bot.sendMessage(chatId, ru.SOURCE_RECEIVED);
+      await bot.sendMessage(chatId, t.SOURCE_RECEIVED);
     }
     await showMainMenu(chatId, session);
     userStates.set(chatId, State.MAIN_MENU);
     sessions.set(chatId, session);
   } catch (error) {
-    await bot.sendMessage(chatId, `${ru.ERROR_GENERIC}: ${error}`);
+    await bot.sendMessage(chatId, `${t.ERROR_GENERIC}: ${error}`);
   }
 }
 
 async function handleClipCountInput(msg: any, chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
   const text = msg.text?.trim();
   const count = parseInt(text || '0', 10);
-  if (isNaN(count) || count < 1 || count > 10) { await bot.sendMessage(chatId, 'Введите число клипов от 1 до 10.'); return; }
+  if (isNaN(count) || count < 1 || count > 10) { await bot.sendMessage(chatId, t.INVALID_CLIP_COUNT); return; }
   session.clipCount = count;
   sessions.set(chatId, session);
   await showMainMenu(chatId, session, menuMessages.get(chatId));
@@ -549,15 +656,16 @@ async function handleClipCountInput(msg: any, chatId: number, session: SessionDa
 }
 
 async function handleSegmentInput(msg: any, chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
   const text = msg.text?.trim();
   const parts = text?.split(' ');
-  if (!parts || parts.length !== 2) { await bot.sendMessage(chatId, ru.INVALID_SEGMENT_FORMAT); return; }
+  if (!parts || parts.length !== 2) { await bot.sendMessage(chatId, t.INVALID_SEGMENT_FORMAT); return; }
   const startTime = parseTimeToSeconds(parts[0]);
   const endTime = parseTimeToSeconds(parts[1]);
-  if (startTime === null || endTime === null) { await bot.sendMessage(chatId, ru.INVALID_SEGMENT_FORMAT); return; }
-  if (startTime >= endTime) { await bot.sendMessage(chatId, ru.INVALID_SEGMENT_RANGE); return; }
-  if (endTime - startTime < 5) { await bot.sendMessage(chatId, 'Минимальная длительность — 5 секунд.'); return; }
-  if (endTime - startTime > 60) { await bot.sendMessage(chatId, 'Максимальная длительность — 60 секунд.'); return; }
+  if (startTime === null || endTime === null) { await bot.sendMessage(chatId, t.INVALID_SEGMENT_FORMAT); return; }
+  if (startTime >= endTime) { await bot.sendMessage(chatId, t.INVALID_SEGMENT_RANGE); return; }
+  if (endTime - startTime < 5) { await bot.sendMessage(chatId, t.SEGMENT_TOO_SHORT); return; }
+  if (endTime - startTime > 60) { await bot.sendMessage(chatId, t.SEGMENT_TOO_LONG); return; }
   session.startTime = startTime;
   session.endTime = endTime;
   sessions.set(chatId, session);
@@ -566,14 +674,15 @@ async function handleSegmentInput(msg: any, chatId: number, session: SessionData
 }
 
 async function handleSpeedInput(msg: any, chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
   const text = msg.text?.trim().replace(',', '.');
   if (!text) {
-    await bot.sendMessage(chatId, ru.INVALID_PLAYBACK_SPEED);
+    await bot.sendMessage(chatId, t.INVALID_PLAYBACK_SPEED);
     return;
   }
   const speed = parseFloat(text);
   if (isNaN(speed) || speed < 0.5 || speed > 3) {
-    await bot.sendMessage(chatId, ru.INVALID_PLAYBACK_SPEED);
+    await bot.sendMessage(chatId, t.INVALID_PLAYBACK_SPEED);
     return;
   }
   // Round to 2 decimals to keep values clean (e.g. 1.50 -> 1.5)
@@ -581,67 +690,70 @@ async function handleSpeedInput(msg: any, chatId: number, session: SessionData):
   session.playbackSpeed = rounded;
   sessions.set(chatId, session);
   if (Math.abs(rounded - 1) < 0.001) {
-    await bot.sendMessage(chatId, ru.PLAYBACK_SPEED_RESET);
+    await bot.sendMessage(chatId, t.PLAYBACK_SPEED_RESET);
   } else {
-    await bot.sendMessage(chatId, ru.PLAYBACK_SPEED_SELECTED(`${rounded}x`));
+    await bot.sendMessage(chatId, t.PLAYBACK_SPEED_SELECTED(`${rounded}x`));
   }
   await showMainMenu(chatId, session, menuMessages.get(chatId));
   userStates.set(chatId, State.MAIN_MENU);
 }
 
 async function handleMusicInput(msg: any, chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
   const text = msg.text?.trim().toLowerCase();
   if (text === 'нет' || text === 'no' || text === 'n') {
     session.mp3Path = undefined;
     sessions.set(chatId, session);
-    await bot.sendMessage(chatId, ru.NO_MUSIC);
+    await bot.sendMessage(chatId, t.NO_MUSIC);
     await showMainMenu(chatId, session, menuMessages.get(chatId));
     userStates.set(chatId, State.MAIN_MENU);
     return;
   }
-  await bot.sendMessage(chatId, 'Пожалуйста, отправьте MP3 файл или напишите "нет" чтобы пропустить.');
+  await bot.sendMessage(chatId, t.MUSIC_PROMPT_OR_SKIP);
 }
 
 async function handleAccountInput(msg: any, chatId: number): Promise<void> {
+  const t = getChatT(chatId);
   const text = msg.text?.trim();
   if (!text) {
-    await bot.sendMessage(chatId, ru.ACCOUNTS_INVALID);
+    await bot.sendMessage(chatId, t.ACCOUNTS_INVALID);
     return;
   }
   const parsed = parseAccountInput(text);
   if (!parsed) {
-    await bot.sendMessage(chatId, ru.ACCOUNTS_INVALID);
+    await bot.sendMessage(chatId, t.ACCOUNTS_INVALID);
     return;
   }
-  await bot.sendMessage(chatId, ru.ACCOUNTS_FETCHING);
+  await bot.sendMessage(chatId, t.ACCOUNTS_FETCHING);
   try {
     const info = await fetchAccount(parsed, 5);
-    const report = formatAccountReport(info);
+    const report = formatAccountReport(info, t);
     await bot.sendMessage(chatId, report);
-    await bot.sendMessage(chatId, ru.ACCOUNTS_DONE);
+    await bot.sendMessage(chatId, t.ACCOUNTS_DONE);
   } catch (error: any) {
-    await bot.sendMessage(chatId, `❌ ${error?.message || ru.ERROR_GENERIC}`);
+    await bot.sendMessage(chatId, `❌ ${error?.message || t.ERROR_GENERIC}`);
   }
 }
 
 async function handleAudioSegment(msg: any, chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
   const text = msg.text?.trim().toLowerCase();
   if (text === 'всё' || text === 'все' || text === 'all') {
-    await bot.sendMessage(chatId, ru.AUDIO_SEGMENT_ALL);
+    await bot.sendMessage(chatId, t.AUDIO_SEGMENT_ALL);
     await showMainMenu(chatId, session, menuMessages.get(chatId));
     userStates.set(chatId, State.MAIN_MENU);
     sessions.set(chatId, session);
     return;
   }
   const parts = text?.split(' ');
-  if (!parts || parts.length !== 2) { await bot.sendMessage(chatId, ru.INVALID_SEGMENT_FORMAT); return; }
+  if (!parts || parts.length !== 2) { await bot.sendMessage(chatId, t.INVALID_SEGMENT_FORMAT); return; }
   const startTime = parseTimeToSeconds(parts[0]);
   const endTime = parseTimeToSeconds(parts[1]);
-  if (startTime === null || endTime === null) { await bot.sendMessage(chatId, ru.INVALID_SEGMENT_FORMAT); return; }
+  if (startTime === null || endTime === null) { await bot.sendMessage(chatId, t.INVALID_SEGMENT_FORMAT); return; }
   session.audioStartTime = startTime;
   session.audioEndTime = endTime;
   sessions.set(chatId, session);
-  await bot.sendMessage(chatId, ru.AUDIO_SEGMENT_SELECTED.replace('{start}', formatSecondsToTime(startTime)).replace('{end}', formatSecondsToTime(endTime)));
+  await bot.sendMessage(chatId, t.AUDIO_SEGMENT_SELECTED.replace('{start}', formatSecondsToTime(startTime)).replace('{end}', formatSecondsToTime(endTime)));
   await showMainMenu(chatId, session, menuMessages.get(chatId));
   userStates.set(chatId, State.MAIN_MENU);
 }
