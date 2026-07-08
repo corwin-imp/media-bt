@@ -215,7 +215,9 @@ async function showLanguageMenu(chatId: number): Promise<void> {
   const keyboard: TelegramBot.InlineKeyboardMarkup = {
     inline_keyboard: [
       [{ text: current === 'ru' ? `${t.LANG_RUSSIAN} ✓` : t.LANG_RUSSIAN, callback_data: 'lang_ru' }],
-      [{ text: current === 'en' ? `${t.LANG_ENGLISH} ✓` : t.LANG_ENGLISH, callback_data: 'lang_en' }]
+      [{ text: current === 'en' ? `${t.LANG_ENGLISH} ✓` : t.LANG_ENGLISH, callback_data: 'lang_en' }],
+      [{ text: current === 'uk' ? `${t.LANG_UKRAINIAN} ✓` : t.LANG_UKRAINIAN, callback_data: 'lang_uk' }],
+      [{ text: current === 'pt' ? `${t.LANG_PORTUGUESE} ✓` : t.LANG_PORTUGUESE, callback_data: 'lang_pt' }]
     ]
   };
   await bot.sendMessage(chatId, t.LANG_TITLE, { parse_mode: 'Markdown', reply_markup: keyboard });
@@ -423,6 +425,16 @@ bot.on('callback_query', async (query) => {
       case 'lang_en':
         userLocales.set(chatId, 'en');
         await bot.answerCallbackQuery(query.id, { text: translations.en.LANG_SELECTED(translations.en.LANG_ENGLISH) });
+        await showLanguageMenu(chatId);
+        return;
+      case 'lang_uk':
+        userLocales.set(chatId, 'uk');
+        await bot.answerCallbackQuery(query.id, { text: translations.uk.LANG_SELECTED(translations.uk.LANG_UKRAINIAN) });
+        await showLanguageMenu(chatId);
+        return;
+      case 'lang_pt':
+        userLocales.set(chatId, 'pt');
+        await bot.answerCallbackQuery(query.id, { text: translations.pt.LANG_SELECTED(translations.pt.LANG_PORTUGUESE) });
         await showLanguageMenu(chatId);
         return;
       case 'back_to_main':
@@ -701,7 +713,7 @@ async function handleSpeedInput(msg: any, chatId: number, session: SessionData):
 async function handleMusicInput(msg: any, chatId: number, session: SessionData): Promise<void> {
   const t = getChatT(chatId);
   const text = msg.text?.trim().toLowerCase();
-  if (text === 'нет' || text === 'no' || text === 'n') {
+  if (text === 'нет' || text === 'no' || text === 'n' || text === 'ні' || text === 'нi' || text === 'não' || text === 'nao') {
     session.mp3Path = undefined;
     sessions.set(chatId, session);
     await bot.sendMessage(chatId, t.NO_MUSIC);
@@ -738,7 +750,7 @@ async function handleAccountInput(msg: any, chatId: number): Promise<void> {
 async function handleAudioSegment(msg: any, chatId: number, session: SessionData): Promise<void> {
   const t = getChatT(chatId);
   const text = msg.text?.trim().toLowerCase();
-  if (text === 'всё' || text === 'все' || text === 'all') {
+  if (text === 'всё' || text === 'все' || text === 'усе' || text === 'усє' || text === 'all' || text === 'tudo' || text === 'todo') {
     await bot.sendMessage(chatId, t.AUDIO_SEGMENT_ALL);
     await showMainMenu(chatId, session, menuMessages.get(chatId));
     userStates.set(chatId, State.MAIN_MENU);

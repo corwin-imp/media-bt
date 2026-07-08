@@ -8,6 +8,8 @@ export interface Translations {
   LANG_SELECTED: (langName: string) => string;
   LANG_RUSSIAN: string;
   LANG_ENGLISH: string;
+  LANG_UKRAINIAN: string;
+  LANG_PORTUGUESE: string;
 
   // Commands / Start
   START: string;

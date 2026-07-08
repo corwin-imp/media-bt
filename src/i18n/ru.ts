@@ -10,6 +10,8 @@ export const ru: Translations = {
   LANG_SELECTED: (langName: string) => `✅ Язык изменён на: ${langName}.`,
   LANG_RUSSIAN: '🇷🇺 Русский',
   LANG_ENGLISH: '🇬🇧 English',
+  LANG_UKRAINIAN: '🇺🇦 Українська',
+  LANG_PORTUGUESE: '🇵🇹 Português',
 
   // Commands / Start
   START: (
@@ -194,13 +196,13 @@ export const ru: Translations = {
   PIPELINE_TASK_ERROR: (error: string) => `Ошибка при обработке задачи: ${error}`,
 
   // Account report labels
-  REPORT_VIDEO: 'Відео',
-  REPORT_UPLOADED: 'Завантажено о',
+  REPORT_VIDEO: 'Видео',
+  REPORT_UPLOADED: 'Загружено',
   REPORT_PLATFORM: 'Платформа',
-  REPORT_SHADOWBAN: 'Тіньовий бан',
-  REPORT_TOTAL_STATS: 'Загальна статистика акаунту',
-  REPORT_FOLLOWERS: 'підписників',
-  REPORT_VIDEOS: 'відео',
+  REPORT_SHADOWBAN: 'Теневой бан',
+  REPORT_TOTAL_STATS: 'Общая статистика аккаунта',
+  REPORT_FOLLOWERS: 'подписчиков',
+  REPORT_VIDEOS: 'видео',
   REPORT_NA: 'Н/Д',
 };
 

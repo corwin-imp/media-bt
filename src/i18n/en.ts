@@ -10,6 +10,8 @@ export const en: Translations = {
   LANG_SELECTED: (langName: string) => `✅ Language changed to: ${langName}.`,
   LANG_RUSSIAN: '🇷🇺 Русский',
   LANG_ENGLISH: '🇬🇧 English',
+  LANG_UKRAINIAN: '🇺🇦 Українська',
+  LANG_PORTUGUESE: '🇵🇹 Português',
 
   // Commands / Start
   START: (
