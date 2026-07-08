@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
+import { createWriteStream } from 'fs';
 import path from 'path';
 import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
@@ -14,7 +15,7 @@ const TT_RE = /tiktok\.com\//;
 async function downloadWithYTDLP(url: string, outDir: string, quality?: number): Promise<string> {
   await fs.mkdir(outDir, { recursive: true });
   
-  const outputPath = path.join(outDir, `${uuidv4().hex}.mp4`);
+  const outputPath = path.join(outDir, `${uuidv4().replace(/-/g, '')}.mp4`);
   
   return new Promise((resolve, reject) => {
     const args = [
@@ -57,7 +58,7 @@ async function downloadWithYTDLP(url: string, outDir: string, quality?: number):
 
 async function downloadHTTPMP4(url: string, outDir: string): Promise<string> {
   await fs.mkdir(outDir, { recursive: true });
-  const outPath = path.join(outDir, `${uuidv4().hex}.mp4`);
+  const outPath = path.join(outDir, `${uuidv4().replace(/-/g, '')}.mp4`);
   
   const response = await axios({
     method: 'GET',
@@ -67,7 +68,7 @@ async function downloadHTTPMP4(url: string, outDir: string): Promise<string> {
     maxRedirects: 5
   });
 
-  const writer = fs.createWriteStream(outPath);
+  const writer = createWriteStream(outPath);
   response.data.pipe(writer);
 
   return new Promise((resolve, reject) => {

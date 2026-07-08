@@ -112,7 +112,7 @@ export function renderClipLocal(params: RenderClipParams): Promise<string> {
     try {
       await fs.mkdir(params.outDir, { recursive: true });
       
-      const outPath = path.join(params.outDir, `clip_${uuidv4().hex}.mp4`);
+      const outPath = path.join(params.outDir, `clip_${uuidv4().replace(/-/g, '')}.mp4`);
       const { crf, preset, targetWidth, targetHeight } = getQualityParams(params.quality);
       
       // Build video filter
@@ -129,10 +129,10 @@ export function renderClipLocal(params: RenderClipParams): Promise<string> {
       const vf = vfParts.join(',');
 
       // Determine which rendering strategy to use
-      if (params.musicAudio) {
+        if (params.musicAudio) {
         let audioFilter: string;
         
-        if (params.audioStartTime !== null && params.audioEndTime !== null) {
+        if (params.audioStartTime !== null && params.audioStartTime !== undefined && params.audioEndTime !== null && params.audioEndTime !== undefined) {
           const audioDuration = params.audioEndTime - params.audioStartTime;
           audioFilter = `[1:a]atrim=${params.audioStartTime.toFixed(3)}:${params.audioEndTime.toFixed(3)},asetpts=PTS-STARTPTS[a]`;
         } else {
@@ -142,7 +142,7 @@ export function renderClipLocal(params: RenderClipParams): Promise<string> {
         const audioFilterSync = `${audioFilter};[a]apad=whole_dur=${params.durationS.toFixed(3)}[a_sync]`;
         
         // Check if we need to check audio duration
-        if (params.audioStartTime !== null && params.audioEndTime !== null) {
+        if (params.audioStartTime !== null && params.audioStartTime !== undefined && params.audioEndTime !== null && params.audioEndTime !== undefined) {
           try {
             const audioDuration = await probeAudioDuration(params.musicAudio);
             if (params.audioEndTime > audioDuration) {
@@ -215,6 +215,28 @@ export function renderClipLocal(params: RenderClipParams): Promise<string> {
   });
 }
 
+// Common encoding settings for Telegram compatibility
+function getTelegramVideoEncodingArgs(crf: string, preset: string): string[] {
+  return [
+    '-c:v', 'libx264',
+    '-preset', preset,
+    '-crf', crf,
+    '-profile:v', 'high',
+    '-level', '4.1',
+    '-pix_fmt', 'yuv420p',
+    '-maxrate', '5M',
+    '-bufsize', '10M',
+    '-r', '30',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-ar', '44100',
+    '-ac', '2',
+    '-movflags', '+faststart',
+    '-threads', '2',
+    '-fflags', '+genpts'
+  ];
+}
+
 function buildMusicArgs(
   sourceVideo: string,
   musicAudio: string,
@@ -228,9 +250,10 @@ function buildMusicArgs(
   preset: string = 'veryfast'
 ): string[] {
   const baseArgs = ['-hide_banner', '-y'];
+  const encodingArgs = getTelegramVideoEncodingArgs(crf, preset);
 
   if (!subtitlesSrt) {
-    // Stream copy video without subtitles
+    // Always re-encode for Telegram compatibility
     return [
       ...baseArgs,
       '-ss', startS.toFixed(3),
@@ -240,11 +263,7 @@ function buildMusicArgs(
       '-filter_complex', audioFilter,
       '-map', '0:v',
       '-map', '[a_sync]',
-      '-c:v', 'copy',
-      '-c:a', 'aac',
-      '-b:a', '192k',
-      '-movflags', '+faststart',
-      '-threads', '2',
+      ...encodingArgs,
       outPath
     ];
   } else {
@@ -256,13 +275,7 @@ function buildMusicArgs(
       '-filter_complex', `[0:v]trim=${startS.toFixed(3)}:${(startS + durationS).toFixed(3)},setpts=PTS-STARTPTS,${vf}[v];${audioFilter}`,
       '-map', '[v]',
       '-map', '[a_sync]',
-      '-c:v', 'libx264',
-      '-preset', preset,
-      '-crf', crf,
-      '-c:a', 'aac',
-      '-b:a', '192k',
-      '-movflags', '+faststart',
-      '-threads', '2',
+      ...encodingArgs,
       outPath
     ];
   }
@@ -280,9 +293,10 @@ function buildTTSArgs(
   preset: string = 'veryfast'
 ): string[] {
   const baseArgs = ['-hide_banner', '-y'];
+  const encodingArgs = getTelegramVideoEncodingArgs(crf, preset);
 
   if (!subtitlesSrt) {
-    // Stream copy video without subtitles
+    // Always re-encode for Telegram compatibility
     return [
       ...baseArgs,
       '-ss', startS.toFixed(3),
@@ -292,11 +306,7 @@ function buildTTSArgs(
       '-filter_complex', `[1:a]atrim=0:${durationS.toFixed(3)},asetpts=PTS-STARTPTS[a];[a]apad=whole_dur=${durationS.toFixed(3)}[a_sync]`,
       '-map', '0:v',
       '-map', '[a_sync]',
-      '-c:v', 'copy',
-      '-c:a', 'aac',
-      '-b:a', '192k',
-      '-movflags', '+faststart',
-      '-threads', '2',
+      ...encodingArgs,
       outPath
     ];
   } else {
@@ -308,13 +318,7 @@ function buildTTSArgs(
       '-filter_complex', `[0:v]trim=${startS.toFixed(3)}:${(startS + durationS).toFixed(3)},setpts=PTS-STARTPTS,${vf}[v];[1:a]atrim=0:${durationS.toFixed(3)},asetpts=PTS-STARTPTS[a];[a]apad=whole_dur=${durationS.toFixed(3)}[a_sync]`,
       '-map', '[v]',
       '-map', '[a_sync]',
-      '-c:v', 'libx264',
-      '-preset', preset,
-      '-crf', crf,
-      '-c:a', 'aac',
-      '-b:a', '192k',
-      '-movflags', '+faststart',
-      '-threads', '2',
+      ...encodingArgs,
       outPath
     ];
   }
@@ -331,18 +335,28 @@ function buildNoTTSArgs(
   preset: string = 'veryfast'
 ): string[] {
   const baseArgs = ['-hide_banner', '-y'];
+  const encodingArgs = getTelegramVideoEncodingArgs(crf, preset);
 
   if (!subtitlesSrt) {
-    // Stream copy both video and audio
+    // Always re-encode for Telegram compatibility
     return [
       ...baseArgs,
       '-ss', startS.toFixed(3),
       '-i', sourceVideo,
       '-t', durationS.toFixed(3),
-      '-c:v', 'copy',
-      '-c:a', 'copy',
+      '-c:v', 'libx264',
+      '-preset', preset,
+      '-crf', crf,
+      '-profile:v', 'high',
+      '-level', '4.1',
+      '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac',
+      '-b:a', '128k',
+      '-ar', '44100',
+      '-ac', '2',
       '-movflags', '+faststart',
       '-threads', '2',
+      '-fflags', '+genpts',
       outPath
     ];
   } else {
@@ -353,13 +367,7 @@ function buildNoTTSArgs(
       '-filter_complex', `[0:v]trim=${startS.toFixed(3)}:${(startS + durationS).toFixed(3)},setpts=PTS-STARTPTS,${vf}[v];[0:a]atrim=${startS.toFixed(3)}:${(startS + durationS).toFixed(3)},asetpts=PTS-STARTPTS[a]`,
       '-map', '[v]',
       '-map', '[a]',
-      '-c:v', 'libx264',
-      '-preset', preset,
-      '-crf', crf,
-      '-c:a', 'aac',
-      '-b:a', '192k',
-      '-movflags', '+faststart',
-      '-threads', '2',
+      ...encodingArgs,
       outPath
     ];
   }

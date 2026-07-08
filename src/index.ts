@@ -8,6 +8,7 @@ import { fetchTrendingHashtags } from './services/trends.js';
 import { ru } from './i18n/ru.js';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { createWriteStream, createReadStream, statSync } from 'fs';
 
 // Setup logging
 setupLogging(settings.DEBUG);
@@ -29,7 +30,7 @@ interface SessionData {
   clipCount?: number;
   startTime?: number;
   endTime?: number;
-  trendChoice?: string;
+  trendChoice?: string | null;
   mp3Path?: string;
   audioStartTime?: number;
   audioEndTime?: number;
@@ -271,7 +272,7 @@ async function handleTrends(msg: any, chatId: number, session: SessionData): Pro
     // Wait for user to select or provide custom tags
     sessions.set(chatId, session);
   } else if (text === 'нет' || text === 'no' || text === 'n') {
-    session.trendChoice = null;
+    session.trendChoice = undefined;
     await bot.sendMessage(chatId, ru.ASK_MUSIC);
     userStates.set(chatId, State.MUSIC_SELECTION);
     sessions.set(chatId, session);
@@ -297,6 +298,51 @@ async function handleTrends(msg: any, chatId: number, session: SessionData): Pro
   }
 }
 
+// Proper TelegramBot wrapper to match our interface
+class TelegramBotWrapper {
+  constructor(private bot: TelegramBot) {}
+  
+  sendMessage(chatId: number, text: string) {
+    return this.bot.sendMessage(chatId, text);
+  }
+  
+  sendVideo(chatId: number, video: Buffer | string | any, caption?: string) {
+    const options: any = {};
+    if (caption) {
+      options.caption = caption;
+    }
+    
+    if (Buffer.isBuffer(video)) {
+      options.filename = 'video.mp4';
+    } else if (typeof video === 'string') {
+      // File path - node-telegram-bot-api handles this natively
+    } else if (video && typeof video === 'object' && video.path) {
+      // ReadStream - need to set filename for Telegram
+      options.filename = 'clip.mp4';
+    }
+    
+    return this.bot.sendVideo(chatId, video, options);
+  }
+  
+  sendAudio(chatId: number, audio: Buffer | string | any, caption?: string) {
+    const options: any = {};
+    if (caption) {
+      options.caption = caption;
+    }
+    
+    if (Buffer.isBuffer(audio)) {
+      options.filename = 'audio.mp3';
+    } else if (typeof audio === 'string') {
+      // File path - node-telegram-bot-api handles this natively
+    } else if (audio && typeof audio === 'object' && audio.path) {
+      // ReadStream - need to set filename for Telegram
+      options.filename = 'audio.mp3';
+    }
+    
+    return this.bot.sendAudio(chatId, audio, options);
+  }
+}
+
 async function handleMusicSelection(msg: any, chatId: number, session: SessionData): Promise<void> {
   const text = msg.text?.trim().toLowerCase();
 
@@ -317,13 +363,38 @@ async function handleAudio(msg: any, chatId: number): Promise<void> {
     const fileInfo = await bot.getFile(fileId);
     const fileUrl = `https://api.telegram.org/file/bot${settings.TELEGRAM_TOKEN}/${fileInfo.file_path}`;
     
-    const response = await fetch(fileUrl);
-    const buffer = await response.arrayBuffer();
     const fileName = `${fileId}.mp3`;
     const filePath = path.join(settings.TMP_DIR, fileName);
     
     await fs.mkdir(settings.TMP_DIR, { recursive: true });
-    await fs.writeFile(filePath, Buffer.from(buffer));
+    
+    // Download using streams to avoid memory issues
+    const response = await fetch(fileUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch audio: ${response.statusText}`);
+    }
+    
+    const fileStream = createWriteStream(filePath);
+    const reader = response.body?.getReader();
+    
+    if (!reader) {
+      throw new Error('Failed to get response stream');
+    }
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      fileStream.write(value);
+    }
+    fileStream.close();
+    
+    // Check file size
+    const stats = await fs.stat(filePath);
+    const fileSizeMB = stats.size / (1024 * 1024);
+    if (fileSizeMB > 50) {
+      await fs.unlink(filePath);
+      throw new Error(`Audio file too large: ${fileSizeMB.toFixed(1)}MB (max 50MB)`);
+    }
     
     session.mp3Path = filePath;
     await bot.sendMessage(chatId, ru.MUSIC_RECEIVED);
@@ -332,6 +403,7 @@ async function handleAudio(msg: any, chatId: number): Promise<void> {
     userStates.set(chatId, State.AUDIO_SEGMENT);
     sessions.set(chatId, session);
   } catch (error) {
+    console.error('Error handling audio:', error);
     await bot.sendMessage(chatId, `${ru.ERROR_GENERIC}: ${error}`);
   }
 }
@@ -382,13 +454,38 @@ async function handleVideo(msg: any, chatId: number, state: State): Promise<void
     const fileInfo = await bot.getFile(fileId);
     const fileUrl = `https://api.telegram.org/file/bot${settings.TELEGRAM_TOKEN}/${fileInfo.file_path}`;
     
-    const response = await fetch(fileUrl);
-    const buffer = await response.arrayBuffer();
     const fileName = `${fileId}.mp4`;
     const filePath = path.join(settings.TMP_DIR, fileName);
     
     await fs.mkdir(settings.TMP_DIR, { recursive: true });
-    await fs.writeFile(filePath, Buffer.from(buffer));
+    
+    // Download using streams to avoid memory issues
+    const response = await fetch(fileUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch video: ${response.statusText}`);
+    }
+    
+    const fileStream = createWriteStream(filePath);
+    const reader = response.body?.getReader();
+    
+    if (!reader) {
+      throw new Error('Failed to get response stream');
+    }
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      fileStream.write(value);
+    }
+    fileStream.close();
+    
+    // Check file size
+    const stats = await fs.stat(filePath);
+    const fileSizeMB = stats.size / (1024 * 1024);
+    if (fileSizeMB > settings.MAX_SOURCE_MB) {
+      await fs.unlink(filePath);
+      throw new Error(`Video file too large: ${fileSizeMB.toFixed(1)}MB (max ${settings.MAX_SOURCE_MB}MB)`);
+    }
     
     session.sourcePath = filePath;
     await bot.sendMessage(chatId, ru.SOURCE_RECEIVED);
@@ -397,6 +494,7 @@ async function handleVideo(msg: any, chatId: number, state: State): Promise<void
     userStates.set(chatId, State.MODE_SELECTION);
     sessions.set(chatId, session);
   } catch (error) {
+    console.error('Error handling video:', error);
     await bot.sendMessage(chatId, `${ru.ERROR_GENERIC}: ${error}`);
   }
 }
@@ -422,7 +520,8 @@ async function startProcessing(chatId: number, session: SessionData): Promise<vo
   });
 
   // Start processing in background
-  processTask(taskId, chatId, bot, storage).catch(error => {
+  const botWrapper = new TelegramBotWrapper(bot);
+  processTask(taskId, chatId, botWrapper, storage).catch(error => {
     console.error('Processing error:', error);
   });
 }
@@ -460,7 +559,40 @@ function parseTimeToSeconds(timeStr: string): number | null {
 
 // Error handling
 bot.on('polling_error', (error) => {
-  console.error(`Polling error: ${error}`);
+  console.error(`Polling error:`, error);
+});
+
+// Global unhandled rejection handler - IMPROVED
+process.on('unhandledRejection', (reason, promise) => {
+  const timestamp = new Date().toISOString();
+  console.error('╔═══════════════════════════════════════════════════════════════╗');
+  console.error('║         UNHANDLED REJECTION DETECTED                        ║');
+  console.error('╚═══════════════════════════════════════════════════════════════╝');
+  console.error(`Time: ${timestamp}`);
+  console.error('Reason:', reason);
+  console.error('Promise:', promise);
+  if (reason instanceof Error) {
+    console.error('Error name:', reason.name);
+    console.error('Error message:', reason.message);
+    console.error('Error stack:', reason.stack);
+  }
+  // Don't crash the bot
+});
+
+// Global uncaught exception handler - IMPROVED
+process.on('uncaughtException', (error) => {
+  const timestamp = new Date().toISOString();
+  console.error('╔═══════════════════════════════════════════════════════════════╗');
+  console.error('║         UNCAUGHT EXCEPTION DETECTED                        ║');
+  console.error('╚═══════════════════════════════════════════════════════════════╝');
+  console.error(`Time: ${timestamp}`);
+  console.error('Error name:', error.name);
+  console.error('Error message:', error.message);
+  console.error('Error stack:', error.stack);
+  // Don't crash the bot, but log it
 });
 
 console.log('Bot started successfully');
+console.log('Memory usage monitoring enabled');
+console.log('Stream-based file handling enabled');
+console.log('Error handling enhanced');

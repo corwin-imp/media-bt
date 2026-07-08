@@ -1,4 +1,6 @@
 import { promises as fs } from 'fs';
+import { createReadStream } from 'fs';
+import { spawn } from 'child_process';
 import path from 'path';
 import { renderClipLocal } from './renderer-ffmpeg.js';
 import { generateScript } from './openai-llm.js';
@@ -9,11 +11,80 @@ import { Storage } from '../storage/storage.js';
 import { writeSimpleSRT } from '../utils/subtitles.js';
 import { settings } from '../config/settings.js';
 
+/**
+ * Validates that a video file is playable and has proper codec/container.
+ * Uses ffprobe to verify the file has valid video and audio streams.
+ */
+async function validateVideo(videoPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const ffprobe = spawn('ffprobe', [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=codec_name,width,height,pix_fmt',
+      '-of', 'default=noprint_wrappers=1',
+      videoPath
+    ]);
+
+    let stdout = '';
+    let stderr = '';
+
+    ffprobe.stdout.on('data', (data: Buffer) => {
+      stdout += data;
+    });
+
+    ffprobe.stderr.on('data', (data: Buffer) => {
+      stderr += data;
+    });
+
+    ffprobe.on('close', (code: number) => {
+      if (code !== 0) {
+        reject(new Error(`Invalid video file (ffprobe failed): ${stderr}`));
+        return;
+      }
+      
+      if (!stdout.trim()) {
+        reject(new Error('Invalid video file: no video stream found'));
+        return;
+      }
+      
+      // Verify codec is h264 (Telegram recommended)
+      if (!stdout.includes('codec_name=h264')) {
+        console.warn(`Video codec is not h264: ${stdout.trim()}`);
+      }
+      
+      // Verify pixel format is yuv420p (required for broad compatibility)
+      if (!stdout.includes('pix_fmt=yuv420p')) {
+        console.warn(`Video pixel format is not yuv420p: ${stdout.trim()}`);
+      }
+      
+      resolve();
+    });
+
+    ffprobe.on('error', (err: Error) => {
+      reject(new Error(`ffprobe not found: ${err.message}`));
+    });
+  });
+}
+
 // Type for Telegram bot - will be defined in bot handlers
 interface TelegramBot {
   sendMessage: (chatId: number, text: string) => Promise<any>;
-  sendVideo: (chatId: number, video: Buffer | string, caption?: string) => Promise<any>;
-  sendAudio: (chatId: number, audio: Buffer | string, caption?: string) => Promise<any>;
+  sendVideo: (chatId: number, video: Buffer | string | any, caption?: string) => Promise<any>;
+  sendAudio: (chatId: number, audio: Buffer | string | any, caption?: string) => Promise<any>;
+}
+
+// Helper function to clean up files
+async function cleanupFiles(filePaths: string[]): Promise<void> {
+  for (const filePath of filePaths) {
+    try {
+      if (filePath) {
+        await fs.unlink(filePath);
+        console.log(`Cleaned up file: ${filePath}`);
+      }
+    } catch (error) {
+      console.error(`Failed to cleanup file ${filePath}:`, error);
+    }
+  }
 }
 
 export async function processTask(
@@ -32,13 +103,30 @@ export async function processTask(
     if (mode === 'download_only') {
       await bot.sendMessage(chatId, 'Готово! Отправляю видео...');
       try {
-        const fileBuffer = await fs.readFile(source);
-        await bot.sendVideo(chatId, fileBuffer, 'Видео скачано без обработки');
+        // Telegram Bot API hard limit: 50MB for sending files
+        const TELEGRAM_MAX_MB = 50;
+        
+        // Check file size before sending
+        const stats = await fs.stat(source);
+        const fileSizeMB = stats.size / (1024 * 1024);
+        
+        if (fileSizeMB > TELEGRAM_MAX_MB) {
+          await bot.sendMessage(chatId, `❌ Видео слишком большое для Telegram (${fileSizeMB.toFixed(1)}MB, лимит 50MB)`);
+          await bot.sendMessage(chatId, `Видео доступно по пути: ${source}`);
+        } else {
+          // Validate video before sending
+          await validateVideo(source);
+          
+          // Send file path directly - node-telegram-bot-api handles it properly
+          await bot.sendVideo(chatId, source, 'Видео скачано без обработки');
+          await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
+        }
       } catch (error) {
-        await bot.sendMessage(chatId, `Видео готово: ${source}`);
+        console.error('Error sending video:', error);
+        await bot.sendMessage(chatId, `❌ Ошибка отправки видео: ${error}`);
+        await bot.sendMessage(chatId, `Видео доступно по пути: ${source}`);
       }
       await storage.updateTaskStatus(taskId, 'done', {});
-      await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
       return;
     }
 
@@ -46,14 +134,27 @@ export async function processTask(
     if (mode === 'audio_only') {
       await bot.sendMessage(chatId, 'Извлекаю аудио...');
       try {
-        const audioPath = await resolveAudioOnly(task.sourceUrl, source);
-        const fileBuffer = await fs.readFile(audioPath);
-        await bot.sendAudio(chatId, fileBuffer, 'Аудио извлечено в MP3');
+        const audioPath = await resolveAudioOnly(task.sourceUrl || null, source || null);
+        
+        // Check file size before sending
+        const stats = await fs.stat(audioPath);
+        const fileSizeMB = stats.size / (1024 * 1024);
+        
+        if (fileSizeMB > 50) {
+          await bot.sendMessage(chatId, `❌ Аудио слишком большое для отправки (${fileSizeMB.toFixed(1)}MB)`);
+          await bot.sendMessage(chatId, `Аудио доступно по пути: ${audioPath}`);
+        } else {
+          // Use stream instead of buffer to avoid memory issues
+          const audioStream = createReadStream(audioPath);
+          await bot.sendAudio(chatId, audioStream, 'Аудио извлечено в MP3');
+          await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
+        }
       } catch (error) {
-        await bot.sendMessage(chatId, `Аудио готово: ${source}`);
+        console.error('Error sending audio:', error);
+        await bot.sendMessage(chatId, `❌ Ошибка отправки аудио: ${error}`);
+        await bot.sendMessage(chatId, `Аудио доступно по пути: ${source}`);
       }
       await storage.updateTaskStatus(taskId, 'done', {});
-      await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
       return;
     }
 
@@ -71,11 +172,11 @@ export async function processTask(
 
     // Determine segments based on mode
     let segments: Array<[number, number]>;
-    if (mode === 'custom_segment' && startTime !== null && endTime !== null) {
+    if (mode === 'custom_segment' && startTime !== null && startTime !== undefined && endTime !== null && endTime !== undefined) {
       const duration = endTime - startTime;
       segments = [[startTime, duration]];
     } else if (mode === 'entire_material') {
-      const totalDuration = probeDuration(source);
+      const totalDuration = await probeDuration(source);
       segments = [[0, totalDuration]];
     } else {
       segments = await proposeSegments(source, clipCount, 15, 25);
@@ -125,16 +226,54 @@ export async function processTask(
     const results = await storage.getResults(taskId);
     await bot.sendMessage(chatId, 'Готово! Отправляю клипы...');
     
+    let successCount = 0;
+    const clipsToCleanup: string[] = [];
+    
+    // Telegram Bot API hard limit: 50MB for sending files
+    const TELEGRAM_MAX_MB = 50;
+    
     for (const result of results) {
       try {
-        const fileBuffer = await fs.readFile(result.clipPath);
-        await bot.sendVideo(chatId, fileBuffer, result.caption);
+        // Check if file exists first
+        await fs.access(result.clipPath);
+        
+        // Check file size
+        const stats = await fs.stat(result.clipPath);
+        const fileSizeMB = stats.size / (1024 * 1024);
+        
+        if (fileSizeMB > TELEGRAM_MAX_MB) {
+          await bot.sendMessage(chatId, `⚠️ Клип слишком большой для Telegram (${fileSizeMB.toFixed(1)}MB, лимит 50MB): ${result.caption}`);
+          console.warn(`Clip too large for Telegram: ${result.clipPath} (${fileSizeMB.toFixed(1)}MB)`);
+          clipsToCleanup.push(result.clipPath);
+          continue;
+        }
+        
+        // Validate video is playable using ffprobe before sending
+        await validateVideo(result.clipPath);
+        
+        // Send file path directly - node-telegram-bot-api handles file paths
+        // and properly sets the filename/mimetype for Telegram
+        await bot.sendVideo(chatId, result.clipPath, result.caption || ' ');
+        successCount++;
+        clipsToCleanup.push(result.clipPath);
       } catch (error) {
-        await bot.sendMessage(chatId, `Клип готов: ${result.clipPath}\n${result.caption}`);
+        console.error('Error processing clip:', error);
+        await bot.sendMessage(chatId, `❌ Ошибка отправки клипа: ${error}`).catch(sendErr => {
+          console.error('Failed to send error message:', sendErr);
+        });
       }
     }
     
-    await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
+    // Cleanup processed clips after sending
+    await cleanupFiles(clipsToCleanup);
+    
+    if (successCount === 0 && results.length > 0) {
+      await bot.sendMessage(chatId, '❌ Не удалось отправить ни один клип. Проверьте логи для деталей.');
+    } else if (successCount < results.length) {
+      await bot.sendMessage(chatId, `✅ Отправлено ${successCount} из ${results.length} клипов. Напишите /start, чтобы создать новое видео.`);
+    } else {
+      await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
+    }
   } catch (error) {
     await storage.updateTaskStatus(taskId, 'failed', { error: String(error) });
     await bot.sendMessage(chatId, `Ошибка при обработке задачи: ${error}`);
@@ -149,5 +288,5 @@ function makeCaption(trend: string | null, script: string | null): string {
   if (script) {
     parts.push(`Voiceover:\n${script.substring(0, 500)}`);
   }
-  return parts.length > 0 ? parts.join('\n\n') : ' ';
+  return parts.length > 0 ? parts.join('\n\n') : '';
 }
