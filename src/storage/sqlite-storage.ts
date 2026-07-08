@@ -36,6 +36,7 @@ export class SQLiteStorage implements Storage {
         audio_end_time REAL,
         quality INTEGER,
         playback_speed REAL,
+        platform TEXT,
         status TEXT,
         meta TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -47,7 +48,8 @@ export class SQLiteStorage implements Storage {
     const columns = this.getColumnInfo('tasks');
     const columnsToCheck = [
       'mode', 'start_time', 'end_time', 'mp3_path', 'source_url',
-      'audio_start_time', 'audio_end_time', 'quality', 'playback_speed'
+      'audio_start_time', 'audio_end_time', 'quality', 'playback_speed',
+      'platform'
     ];
 
     // Column type mapping for migrations (newly added columns).
@@ -63,7 +65,8 @@ export class SQLiteStorage implements Storage {
       audio_start_time: 'REAL',
       audio_end_time: 'REAL',
       quality: 'INTEGER',
-      playback_speed: 'REAL'
+      playback_speed: 'REAL',
+      platform: 'TEXT'
     };
 
     for (const col of columnsToCheck) {
@@ -101,11 +104,13 @@ export class SQLiteStorage implements Storage {
       INSERT INTO tasks (
         id, user_id, source_path, source_url, mode, clip_count,
         start_time, end_time, trend_choice, mp3_path,
-        audio_start_time, audio_end_time, quality, playback_speed, status, meta
+        audio_start_time, audio_end_time, quality, playback_speed,
+        platform, status, meta
       ) VALUES (
         @id, @userId, @sourcePath, @sourceUrl, @mode, @clipCount,
         @startTime, @endTime, @trendChoice, @mp3Path,
-        @audioStartTime, @audioEndTime, @quality, @playbackSpeed, @status, @meta
+        @audioStartTime, @audioEndTime, @quality, @playbackSpeed,
+        @platform, @status, @meta
       )
     `);
 
@@ -124,6 +129,7 @@ export class SQLiteStorage implements Storage {
       audioEndTime: params.audioEndTime ?? null,
       quality: params.quality ?? null,
       playbackSpeed: params.playbackSpeed ?? null,
+      platform: params.platform ?? null,
       status: 'queued',
       meta: JSON.stringify({})
     });
@@ -157,7 +163,8 @@ export class SQLiteStorage implements Storage {
     const stmt = this.db.prepare(`
       SELECT id, user_id, source_path, source_url, mode, clip_count,
              start_time, end_time, trend_choice, mp3_path,
-             audio_start_time, audio_end_time, quality, playback_speed, status, meta
+             audio_start_time, audio_end_time, quality, playback_speed,
+             platform, status, meta
       FROM tasks WHERE id = ?
     `);
     
@@ -181,6 +188,7 @@ export class SQLiteStorage implements Storage {
       audioEndTime: SQLiteStorage.toNumber(row.audio_end_time),
       quality: SQLiteStorage.toNumber(row.quality),
       playbackSpeed: SQLiteStorage.toNumber(row.playback_speed),
+      platform: row.platform || null,
       status: row.status,
       meta: JSON.parse(row.meta || '{}')
     };

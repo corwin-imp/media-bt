@@ -20,6 +20,7 @@ export interface CreateTaskParams {
   audioEndTime?: number | null;
   quality?: number | null;
   playbackSpeed?: number | null;
+  platform?: string | null;
 }
 
 export interface Task {
@@ -37,6 +38,7 @@ export interface Task {
   audioEndTime?: number | null;
   quality?: number | null;
   playbackSpeed?: number | null;
+  platform?: string | null;
   status: string;
   meta: Record<string, any>;
 }

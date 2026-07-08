@@ -13,6 +13,19 @@ import { writeSimpleSRT } from '../utils/subtitles.js';
 import { settings } from '../config/settings.js';
 
 /**
+ * Platform presets for "auto mode".
+ * Each preset defines the recommended clip duration range (seconds) and the
+ * default number of clips to extract when the user has not set them manually.
+ * All three platforms use vertical 9:16 (handled by the renderer's
+ * getQualityParams → 1080x1920 default), so the main difference is duration.
+ */
+const PLATFORM_PRESETS: Record<string, { minDuration: number; maxDuration: number; defaultClipCount: number; label: string }> = {
+  tiktok: { minDuration: 15, maxDuration: 25, defaultClipCount: 3, label: 'TikTok' },
+  shorts: { minDuration: 15, maxDuration: 60, defaultClipCount: 3, label: 'YouTube Shorts' },
+  reels: { minDuration: 15, maxDuration: 30, defaultClipCount: 3, label: 'Instagram Reels' }
+};
+
+/**
  * Validates that a video file is playable and has proper codec/container.
  * Uses ffprobe to verify the file has valid video and audio streams.
  */
@@ -245,7 +258,9 @@ export async function processTask(
       return;
     }
 
-    const clipCount = task.clipCount;
+    const platform = task.platform || null;
+    const preset = platform ? PLATFORM_PRESETS[platform] : null;
+    const clipCount = preset && !task.clipCount ? preset.defaultClipCount : task.clipCount;
     const startTime = task.startTime;
     const endTime = task.endTime;
     const trend = task.trendChoice || null;
@@ -276,7 +291,9 @@ export async function processTask(
         chatId,
         `🎬 Анализирую видео для поиска лучших моментов (${backendLabel}). Это займёт немного времени...`
       );
-      segments = await proposeSegments(source, clipCount, 15, 25);
+      const minDur = preset ? preset.minDuration : 15;
+      const maxDur = preset ? preset.maxDuration : 25;
+      segments = await proposeSegments(source, clipCount, minDur, maxDur);
     }
 
     const outDir = path.join(settings.DATA_DIR, 'out', taskId);

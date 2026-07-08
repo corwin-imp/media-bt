@@ -31,7 +31,18 @@ interface SessionData {
   trimMode?: 'top_moments' | 'custom_segment' | null;
   audioOnly?: boolean;
   playbackSpeed?: number | null;
+  platform?: string | null;
 }
+
+/**
+ * Platform presets for "auto mode" (UI side). Mirrors pipeline.ts presets so
+ * that selecting a platform here applies the right defaults immediately.
+ */
+const PLATFORM_PRESETS: Record<string, { label: string; clipCount: number }> = {
+  tiktok: { label: ru.PLATFORM_TIKTOK, clipCount: 3 },
+  shorts: { label: ru.PLATFORM_SHORTS, clipCount: 3 },
+  reels: { label: ru.PLATFORM_REELS, clipCount: 3 }
+};
 
 enum State {
   SOURCE = 1,
@@ -77,6 +88,13 @@ function getSpeedButtonText(session: SessionData): string {
   return `⚡️ Скорость: ${speed}x`;
 }
 
+function getAutoModeButtonText(session: SessionData): string {
+  if (session.platform && PLATFORM_PRESETS[session.platform]) {
+    return `🎯 Авто режим: ${PLATFORM_PRESETS[session.platform].label} ✓`;
+  }
+  return '🎯 Авто режим';
+}
+
 function formatSecondsToTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
@@ -87,6 +105,7 @@ async function showMainMenu(chatId: number, session: SessionData, editMessageId?
   const text = '🎬 *Настройки обработки видео*\n\nВыберите параметры:';
   const keyboard: TelegramBot.InlineKeyboardMarkup = {
     inline_keyboard: [
+      [{ text: getAutoModeButtonText(session), callback_data: 'auto_mode' }],
       [{ text: getTrimButtonText(session), callback_data: 'trim_menu' }],
       [{ text: getAudioButtonText(session), callback_data: 'toggle_audio' }],
       [{ text: getSpeedButtonText(session), callback_data: 'speed_menu' }],
@@ -139,6 +158,38 @@ async function showTagsMenu(chatId: number, session: SessionData): Promise<void>
     inline_keyboard: [
       [{ text: '✅ Да, показать тренды', callback_data: 'tags_yes' }],
       [{ text: '❌ Нет, пропустить', callback_data: 'tags_no' }]
+    ]
+  };
+  if (messageId) {
+    try {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: keyboard });
+    } catch {
+      const msg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
+      menuMessages.set(chatId, msg.message_id);
+    }
+  }
+  sessions.set(chatId, session);
+}
+
+async function showAutoModeMenu(chatId: number, session: SessionData): Promise<void> {
+  const messageId = menuMessages.get(chatId);
+  const text = ru.AUTO_MODE_TITLE;
+  const tiktokText = session.platform === 'tiktok'
+    ? `${PLATFORM_PRESETS.tiktok.label} ✓`
+    : PLATFORM_PRESETS.tiktok.label;
+  const shortsText = session.platform === 'shorts'
+    ? `${PLATFORM_PRESETS.shorts.label} ✓`
+    : PLATFORM_PRESETS.shorts.label;
+  const reelsText = session.platform === 'reels'
+    ? `${PLATFORM_PRESETS.reels.label} ✓`
+    : PLATFORM_PRESETS.reels.label;
+  const keyboard: TelegramBot.InlineKeyboardMarkup = {
+    inline_keyboard: [
+      [{ text: `🎵 ${tiktokText}`, callback_data: 'auto_tiktok' }],
+      [{ text: `▶️ ${shortsText}`, callback_data: 'auto_shorts' }],
+      [{ text: `📸 ${reelsText}`, callback_data: 'auto_reels' }],
+      [{ text: '❌ Выключить авто режим', callback_data: 'auto_off' }],
+      [{ text: '◀️ Назад', callback_data: 'back_to_main' }]
     ]
   };
   if (messageId) {
@@ -206,7 +257,8 @@ async function startUpload(chatId: number, session: SessionData): Promise<void> 
     audioStartTime: session.audioStartTime || null,
     audioEndTime: session.audioEndTime || null,
     quality: session.quality || null,
-    playbackSpeed: session.playbackSpeed || null
+    playbackSpeed: session.playbackSpeed || null,
+    platform: session.platform || null
   });
   
   const botWrapper = new TelegramBotWrapper(bot);
@@ -227,6 +279,39 @@ bot.on('callback_query', async (query) => {
       return;
     }
     switch (data) {
+      case 'auto_mode':
+        await showAutoModeMenu(chatId, session);
+        break;
+      case 'auto_tiktok':
+        session.platform = 'tiktok';
+        // Auto mode selects top_moments + sensible clip count for the platform
+        session.trimMode = 'top_moments';
+        session.audioOnly = false;
+        if (!session.clipCount) session.clipCount = PLATFORM_PRESETS.tiktok.clipCount;
+        await bot.sendMessage(chatId, ru.AUTO_MODE_SELECTED(PLATFORM_PRESETS.tiktok.label));
+        await showMainMenu(chatId, session, menuMessages.get(chatId));
+        break;
+      case 'auto_shorts':
+        session.platform = 'shorts';
+        session.trimMode = 'top_moments';
+        session.audioOnly = false;
+        if (!session.clipCount) session.clipCount = PLATFORM_PRESETS.shorts.clipCount;
+        await bot.sendMessage(chatId, ru.AUTO_MODE_SELECTED(PLATFORM_PRESETS.shorts.label));
+        await showMainMenu(chatId, session, menuMessages.get(chatId));
+        break;
+      case 'auto_reels':
+        session.platform = 'reels';
+        session.trimMode = 'top_moments';
+        session.audioOnly = false;
+        if (!session.clipCount) session.clipCount = PLATFORM_PRESETS.reels.clipCount;
+        await bot.sendMessage(chatId, ru.AUTO_MODE_SELECTED(PLATFORM_PRESETS.reels.label));
+        await showMainMenu(chatId, session, menuMessages.get(chatId));
+        break;
+      case 'auto_off':
+        session.platform = null;
+        await bot.sendMessage(chatId, ru.AUTO_MODE_CLEARED);
+        await showMainMenu(chatId, session, menuMessages.get(chatId));
+        break;
       case 'trim_menu':
         await showTrimMenu(chatId, session);
         break;

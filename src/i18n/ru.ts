@@ -81,7 +81,13 @@ export const ru = {
   ),
   ACCOUNTS_INVALID: 'Не удалось распознать аккаунт. Пришлите ссылку или @username (TikTok/Instagram/YouTube).',
   ACCOUNTS_FETCHING: '⏳ Собираю данные аккаунта... (может занять до 30 секунд)',
-  ACCOUNTS_DONE: '✅ Готово.'
+  ACCOUNTS_DONE: '✅ Готово.',
+  AUTO_MODE_TITLE: '🎯 *Авто режим*\n\nВыберите платформу — я автоматически настрою обрезку, длительность и количество клипов под формат:',
+  AUTO_MODE_SELECTED: (platformLabel: string) => `✅ Авто режим включён: ${platformLabel}.`,
+  AUTO_MODE_CLEARED: 'Авто режим отключён. Настройки сброшены к ручным.',
+  PLATFORM_TIKTOK: 'TikTok',
+  PLATFORM_SHORTS: 'YouTube Shorts',
+  PLATFORM_REELS: 'Instagram Reels'
 };
 
 export default ru;
