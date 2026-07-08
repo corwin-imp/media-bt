@@ -74,7 +74,7 @@ interface TelegramBot {
 }
 
 // Helper function to clean up files
-async function cleanupFiles(filePaths: string[]): Promise<void> {
+async function cleanupFiles(filePaths: (string | null | undefined)[]): Promise<void> {
   for (const filePath of filePaths) {
     try {
       if (filePath) {
@@ -84,6 +84,18 @@ async function cleanupFiles(filePaths: string[]): Promise<void> {
     } catch (error) {
       console.error(`Failed to cleanup file ${filePath}:`, error);
     }
+  }
+}
+
+// Helper function to recursively clean up a directory (and its contents)
+async function cleanupDirectory(dirPath: string): Promise<void> {
+  try {
+    if (dirPath) {
+      await fs.rm(dirPath, { recursive: true, force: true });
+      console.log(`Cleaned up directory: ${dirPath}`);
+    }
+  } catch (error) {
+    console.error(`Failed to cleanup directory ${dirPath}:`, error);
   }
 }
 
@@ -112,19 +124,20 @@ export async function processTask(
         
         if (fileSizeMB > TELEGRAM_MAX_MB) {
           await bot.sendMessage(chatId, `❌ Видео слишком большое для Telegram (${fileSizeMB.toFixed(1)}MB, лимит 50MB)`);
-          await bot.sendMessage(chatId, `Видео доступно по пути: ${source}`);
         } else {
           // Validate video before sending
           await validateVideo(source);
           
-          // Send file path directly - node-telegram-bot-api handles it properly
+          // Send file path directly - node-telegram-bot-api handles file paths properly
           await bot.sendVideo(chatId, source, 'Видео скачано без обработки');
           await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
         }
       } catch (error) {
         console.error('Error sending video:', error);
         await bot.sendMessage(chatId, `❌ Ошибка отправки видео: ${error}`);
-        await bot.sendMessage(chatId, `Видео доступно по пути: ${source}`);
+      } finally {
+        // Clean up source video from tmp after sending (regardless of outcome)
+        await cleanupFiles([source]);
       }
       await storage.updateTaskStatus(taskId, 'done', {});
       return;
@@ -133,8 +146,9 @@ export async function processTask(
     // Audio only mode
     if (mode === 'audio_only') {
       await bot.sendMessage(chatId, 'Извлекаю аудио...');
+      let audioPath: string | null = null;
       try {
-        const audioPath = await resolveAudioOnly(task.sourceUrl || null, source || null);
+        audioPath = await resolveAudioOnly(task.sourceUrl || null, source || null);
         
         // Check file size before sending
         const stats = await fs.stat(audioPath);
@@ -142,7 +156,6 @@ export async function processTask(
         
         if (fileSizeMB > 50) {
           await bot.sendMessage(chatId, `❌ Аудио слишком большое для отправки (${fileSizeMB.toFixed(1)}MB)`);
-          await bot.sendMessage(chatId, `Аудио доступно по пути: ${audioPath}`);
         } else {
           // Use stream instead of buffer to avoid memory issues
           const audioStream = createReadStream(audioPath);
@@ -152,7 +165,9 @@ export async function processTask(
       } catch (error) {
         console.error('Error sending audio:', error);
         await bot.sendMessage(chatId, `❌ Ошибка отправки аудио: ${error}`);
-        await bot.sendMessage(chatId, `Аудио доступно по пути: ${source}`);
+      } finally {
+        // Clean up extracted audio and source video from tmp after sending
+        await cleanupFiles([audioPath, source]);
       }
       await storage.updateTaskStatus(taskId, 'done', {});
       return;
@@ -266,6 +281,10 @@ export async function processTask(
     
     // Cleanup processed clips after sending
     await cleanupFiles(clipsToCleanup);
+    // Clean up source video and user-provided music from tmp after sending
+    await cleanupFiles([source, musicPath || null]);
+    // Remove the entire output directory (TTS audio, SRT subtitles, and any leftovers)
+    await cleanupDirectory(outDir);
     
     if (successCount === 0 && results.length > 0) {
       await bot.sendMessage(chatId, '❌ Не удалось отправить ни один клип. Проверьте логи для деталей.');
