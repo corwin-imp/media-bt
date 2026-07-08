@@ -55,7 +55,21 @@ export const ru = {
     + '- Напиши \'всё\' чтобы использовать всё аудио целиком'
   ),
   AUDIO_SEGMENT_SELECTED: 'Отрезок аудио выбран: с {start} по {end}.',
-  AUDIO_SEGMENT_ALL: 'Буду использовать всё аудио целиком.'
+  AUDIO_SEGMENT_ALL: 'Буду использовать всё аудио целиком.',
+  ACCOUNTS_BUTTON: '📊 Аккаунты',
+  ACCOUNTS_PROMPT: (
+    '📊 *Просмотр аккаунтов*\n\n'
+    + 'Отправьте ссылку или @username аккаунта TikTok, Instagram или YouTube.\n'
+    + 'Примеры:\n'
+    + '• @coinbase\n'
+    + '• https://www.tiktok.com/@coinbase\n'
+    + '• https://www.instagram.com/coinbase/\n'
+    + '• https://www.youtube.com/@MrBeast\n\n'
+    + 'Бот покажет 5 последних видео и общую статистику.'
+  ),
+  ACCOUNTS_INVALID: 'Не удалось распознать аккаунт. Пришлите ссылку или @username (TikTok/Instagram/YouTube).',
+  ACCOUNTS_FETCHING: '⏳ Собираю данные аккаунта... (может занять до 30 секунд)',
+  ACCOUNTS_DONE: '✅ Готово.'
 };
 
 export default ru;

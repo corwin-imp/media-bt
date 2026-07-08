@@ -5,6 +5,7 @@ import { SQLiteStorage } from './storage/sqlite-storage.js';
 import { processTask } from './services/pipeline.js';
 import { resolveSourceWithQuality } from './services/video-downloader.js';
 import { fetchTrendingHashtags } from './services/trends.js';
+import { parseAccountInput, fetchAccount, formatAccountReport } from './services/account-viewer.js';
 import { ru } from './i18n/ru.js';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -39,7 +40,8 @@ enum State {
   SEGMENT_INPUT = 5,
   MUSIC_INPUT = 6,
   AUDIO_SEGMENT = 7,
-  PROCESSING = 8
+  PROCESSING = 8,
+  ACCOUNT_INPUT = 9
 }
 
 const userStates = new Map<number, State>();
@@ -243,6 +245,10 @@ bot.on('callback_query', async (query) => {
       case 'start_upload':
         await startUpload(chatId, session);
         break;
+      case 'accounts':
+        await bot.sendMessage(chatId, ru.ACCOUNTS_PROMPT, { parse_mode: 'Markdown' });
+        userStates.set(chatId, State.ACCOUNT_INPUT);
+        break;
       case 'back_to_main':
         await showMainMenu(chatId, session, menuMessages.get(chatId));
         break;
@@ -273,8 +279,18 @@ function resetSession(chatId: number): void {
 
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
-  await bot.sendMessage(chatId, ru.START);
+  const keyboard = {
+    keyboard: [[{ text: ru.ACCOUNTS_BUTTON }]],
+    resize_keyboard: true
+  };
+  await bot.sendMessage(chatId, ru.START, { reply_markup: keyboard as any });
   userStates.set(chatId, State.SOURCE);
+});
+
+bot.onText(/\/accounts/, async (msg) => {
+  const chatId = msg.chat.id;
+  await bot.sendMessage(chatId, ru.ACCOUNTS_PROMPT, { parse_mode: 'Markdown' });
+  userStates.set(chatId, State.ACCOUNT_INPUT);
 });
 
 bot.onText(/\/help/, async (msg) => {
@@ -292,6 +308,13 @@ bot.onText(/\/cancel/, async (msg) => {
 
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
+  const text = msg.text?.trim();
+  // Handle the persistent keyboard "Accounts" button from any state
+  if (text === ru.ACCOUNTS_BUTTON) {
+    await bot.sendMessage(chatId, ru.ACCOUNTS_PROMPT, { parse_mode: 'Markdown' });
+    userStates.set(chatId, State.ACCOUNT_INPUT);
+    return;
+  }
   const state = userStates.get(chatId);
   if (!state || msg.text?.startsWith('/')) return;
   const session = sessions.get(chatId) || {};
@@ -303,6 +326,7 @@ bot.on('message', async (msg) => {
       case State.SEGMENT_INPUT: await handleSegmentInput(msg, chatId, session); break;
       case State.MUSIC_INPUT: await handleMusicInput(msg, chatId, session); break;
       case State.AUDIO_SEGMENT: await handleAudioSegment(msg, chatId, session); break;
+      case State.ACCOUNT_INPUT: await handleAccountInput(msg, chatId); break;
     }
   } catch (error) {
     await bot.sendMessage(chatId, `${ru.ERROR_GENERIC}: ${error}`);
@@ -442,6 +466,28 @@ async function handleMusicInput(msg: any, chatId: number, session: SessionData):
     return;
   }
   await bot.sendMessage(chatId, 'Пожалуйста, отправьте MP3 файл или напишите "нет" чтобы пропустить.');
+}
+
+async function handleAccountInput(msg: any, chatId: number): Promise<void> {
+  const text = msg.text?.trim();
+  if (!text) {
+    await bot.sendMessage(chatId, ru.ACCOUNTS_INVALID);
+    return;
+  }
+  const parsed = parseAccountInput(text);
+  if (!parsed) {
+    await bot.sendMessage(chatId, ru.ACCOUNTS_INVALID);
+    return;
+  }
+  await bot.sendMessage(chatId, ru.ACCOUNTS_FETCHING);
+  try {
+    const info = await fetchAccount(parsed, 5);
+    const report = formatAccountReport(info);
+    await bot.sendMessage(chatId, report);
+    await bot.sendMessage(chatId, ru.ACCOUNTS_DONE);
+  } catch (error: any) {
+    await bot.sendMessage(chatId, `❌ ${error?.message || ru.ERROR_GENERIC}`);
+  }
 }
 
 async function handleAudioSegment(msg: any, chatId: number, session: SessionData): Promise<void> {
