@@ -253,6 +253,7 @@ export async function processTask(
     const audioStartTime = task.audioStartTime;
     const audioEndTime = task.audioEndTime;
     const quality = task.quality;
+    const playbackSpeed = task.playbackSpeed;
 
     const useLLM = !!settings.OPENAI_API_KEY;
     const useTTS = !!(settings.ELEVENLABS_API_KEY && settings.ELEVENLABS_VOICE_ID && !musicPath);
@@ -311,7 +312,8 @@ export async function processTask(
         musicAudio: musicPath || null,
         audioStartTime: audioStartTime || null,
         audioEndTime: audioEndTime || null,
-        quality: quality || null
+        quality: quality || null,
+        playbackSpeed: playbackSpeed || null
       });
 
       const caption = makeCaption(trend, script);

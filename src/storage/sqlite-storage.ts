@@ -35,6 +35,7 @@ export class SQLiteStorage implements Storage {
         audio_start_time REAL,
         audio_end_time REAL,
         quality INTEGER,
+        playback_speed REAL,
         status TEXT,
         meta TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -45,14 +46,30 @@ export class SQLiteStorage implements Storage {
     // Add columns if they don't exist (migration)
     const columns = this.getColumnInfo('tasks');
     const columnsToCheck = [
-      'mode', 'start_time', 'end_time', 'mp3_path', 'source_url', 
-      'audio_start_time', 'audio_end_time', 'quality'
+      'mode', 'start_time', 'end_time', 'mp3_path', 'source_url',
+      'audio_start_time', 'audio_end_time', 'quality', 'playback_speed'
     ];
+
+    // Column type mapping for migrations (newly added columns).
+    // Numeric columns must be REAL, otherwise SQLite stores numbers as TEXT
+    // and better-sqlite3 returns them as strings, which breaks Number methods
+    // like `.toFixed()` downstream (e.g. playback_speed, start_time, ...).
+    const columnTypes: Record<string, string> = {
+      mode: 'TEXT',
+      start_time: 'REAL',
+      end_time: 'REAL',
+      mp3_path: 'TEXT',
+      source_url: 'TEXT',
+      audio_start_time: 'REAL',
+      audio_end_time: 'REAL',
+      quality: 'INTEGER',
+      playback_speed: 'REAL'
+    };
 
     for (const col of columnsToCheck) {
       if (!columns.includes(col)) {
         try {
-          const type = ['user_id', 'clip_count', 'quality'].includes(col) ? 'INTEGER' : 'TEXT';
+          const type = columnTypes[col] || 'TEXT';
           this.db.exec(`ALTER TABLE tasks ADD COLUMN ${col} ${type}`);
         } catch (err) {
           // Column might already exist, ignore
@@ -84,27 +101,32 @@ export class SQLiteStorage implements Storage {
       INSERT INTO tasks (
         id, user_id, source_path, source_url, mode, clip_count,
         start_time, end_time, trend_choice, mp3_path,
-        audio_start_time, audio_end_time, quality, status, meta
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        audio_start_time, audio_end_time, quality, playback_speed, status, meta
+      ) VALUES (
+        @id, @userId, @sourcePath, @sourceUrl, @mode, @clipCount,
+        @startTime, @endTime, @trendChoice, @mp3Path,
+        @audioStartTime, @audioEndTime, @quality, @playbackSpeed, @status, @meta
+      )
     `);
 
-    stmt.run(
-      taskId,
-      params.userId,
-      params.sourcePath,
-      params.sourceUrl || null,
-      params.mode,
-      params.clipCount,
-      params.startTime || null,
-      params.endTime || null,
-      params.trendChoice || null,
-      params.mp3Path || null,
-      params.audioStartTime || null,
-      params.audioEndTime || null,
-      params.quality || null,
-      'queued',
-      JSON.stringify({})
-    );
+    stmt.run({
+      id: taskId,
+      userId: params.userId,
+      sourcePath: params.sourcePath,
+      sourceUrl: params.sourceUrl ?? null,
+      mode: params.mode,
+      clipCount: params.clipCount,
+      startTime: params.startTime ?? null,
+      endTime: params.endTime ?? null,
+      trendChoice: params.trendChoice ?? null,
+      mp3Path: params.mp3Path ?? null,
+      audioStartTime: params.audioStartTime ?? null,
+      audioEndTime: params.audioEndTime ?? null,
+      quality: params.quality ?? null,
+      playbackSpeed: params.playbackSpeed ?? null,
+      status: 'queued',
+      meta: JSON.stringify({})
+    });
 
     return taskId;
   }
@@ -123,11 +145,19 @@ export class SQLiteStorage implements Storage {
     stmt.run(taskId, clipPath, caption);
   }
 
+  // Coerce a value that might be stored as TEXT (legacy schema) back to a number.
+  // Returns null for null/undefined/empty so callers keep their `| null` contract.
+  private static toNumber(v: any): number | null {
+    if (v === null || v === undefined || v === '') return null;
+    const n = typeof v === 'number' ? v : Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
   async getTask(taskId: string): Promise<Task> {
     const stmt = this.db.prepare(`
       SELECT id, user_id, source_path, source_url, mode, clip_count,
              start_time, end_time, trend_choice, mp3_path,
-             audio_start_time, audio_end_time, quality, status, meta
+             audio_start_time, audio_end_time, quality, playback_speed, status, meta
       FROM tasks WHERE id = ?
     `);
     
@@ -143,13 +173,14 @@ export class SQLiteStorage implements Storage {
       sourceUrl: row.source_url,
       mode: row.mode || 'top_moments',
       clipCount: row.clip_count,
-      startTime: row.start_time,
-      endTime: row.end_time,
+      startTime: SQLiteStorage.toNumber(row.start_time),
+      endTime: SQLiteStorage.toNumber(row.end_time),
       trendChoice: row.trend_choice,
       mp3Path: row.mp3_path,
-      audioStartTime: row.audio_start_time,
-      audioEndTime: row.audio_end_time,
-      quality: row.quality,
+      audioStartTime: SQLiteStorage.toNumber(row.audio_start_time),
+      audioEndTime: SQLiteStorage.toNumber(row.audio_end_time),
+      quality: SQLiteStorage.toNumber(row.quality),
+      playbackSpeed: SQLiteStorage.toNumber(row.playback_speed),
       status: row.status,
       meta: JSON.parse(row.meta || '{}')
     };

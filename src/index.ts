@@ -30,6 +30,7 @@ interface SessionData {
   audioEndTime?: number;
   trimMode?: 'top_moments' | 'custom_segment' | null;
   audioOnly?: boolean;
+  playbackSpeed?: number | null;
 }
 
 enum State {
@@ -41,7 +42,8 @@ enum State {
   MUSIC_INPUT = 6,
   AUDIO_SEGMENT = 7,
   PROCESSING = 8,
-  ACCOUNT_INPUT = 9
+  ACCOUNT_INPUT = 9,
+  SPEED_INPUT = 10
 }
 
 const userStates = new Map<number, State>();
@@ -68,6 +70,13 @@ function getMusicButtonText(session: SessionData): string {
   return session.mp3Path ? '🎵 Аудиозапись: Заменена ✓' : '🎵 Поменять аудиозапись';
 }
 
+function getSpeedButtonText(session: SessionData): string {
+  const speed = session.playbackSpeed && Math.abs(session.playbackSpeed - 1) >= 0.001
+    ? session.playbackSpeed
+    : 1;
+  return `⚡️ Скорость: ${speed}x`;
+}
+
 function formatSecondsToTime(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
@@ -80,6 +89,7 @@ async function showMainMenu(chatId: number, session: SessionData, editMessageId?
     inline_keyboard: [
       [{ text: getTrimButtonText(session), callback_data: 'trim_menu' }],
       [{ text: getAudioButtonText(session), callback_data: 'toggle_audio' }],
+      [{ text: getSpeedButtonText(session), callback_data: 'speed_menu' }],
       [{ text: '🏷️ Посмотреть теги', callback_data: 'view_tags' }],
       [{ text: getMusicButtonText(session), callback_data: 'change_music' }],
       [{ text: '🚀 Загрузить', callback_data: 'start_upload' }]
@@ -195,7 +205,8 @@ async function startUpload(chatId: number, session: SessionData): Promise<void> 
     mp3Path: session.mp3Path || null,
     audioStartTime: session.audioStartTime || null,
     audioEndTime: session.audioEndTime || null,
-    quality: session.quality || null
+    quality: session.quality || null,
+    playbackSpeed: session.playbackSpeed || null
   });
   
   const botWrapper = new TelegramBotWrapper(bot);
@@ -209,8 +220,12 @@ bot.on('callback_query', async (query) => {
   if (!chatId) return;
   const data = query.data;
   const session = sessions.get(chatId) || {};
-  
+
   try {
+    if (!data) {
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
     switch (data) {
       case 'trim_menu':
         await showTrimMenu(chatId, session);
@@ -234,6 +249,15 @@ bot.on('callback_query', async (query) => {
         // НЕ сбрасываем trimMode - сохраняем оба состояния независимо
         await showMainMenu(chatId, session, menuMessages.get(chatId));
         break;
+      case 'speed_menu': {
+        const current = session.playbackSpeed && Math.abs(session.playbackSpeed - 1) >= 0.001
+          ? session.playbackSpeed
+          : 1;
+        await bot.sendMessage(chatId, ru.ASK_PLAYBACK_SPEED.replace('{current}', `${current}x`));
+        userStates.set(chatId, State.SPEED_INPUT);
+        sessions.set(chatId, session);
+        break;
+      }
       case 'view_tags':
         await showTagsMenu(chatId, session);
         break;
@@ -325,6 +349,7 @@ bot.on('message', async (msg) => {
       case State.CLIP_COUNT_INPUT: await handleClipCountInput(msg, chatId, session); break;
       case State.SEGMENT_INPUT: await handleSegmentInput(msg, chatId, session); break;
       case State.MUSIC_INPUT: await handleMusicInput(msg, chatId, session); break;
+      case State.SPEED_INPUT: await handleSpeedInput(msg, chatId, session); break;
       case State.AUDIO_SEGMENT: await handleAudioSegment(msg, chatId, session); break;
       case State.ACCOUNT_INPUT: await handleAccountInput(msg, chatId); break;
     }
@@ -451,6 +476,30 @@ async function handleSegmentInput(msg: any, chatId: number, session: SessionData
   session.startTime = startTime;
   session.endTime = endTime;
   sessions.set(chatId, session);
+  await showMainMenu(chatId, session, menuMessages.get(chatId));
+  userStates.set(chatId, State.MAIN_MENU);
+}
+
+async function handleSpeedInput(msg: any, chatId: number, session: SessionData): Promise<void> {
+  const text = msg.text?.trim().replace(',', '.');
+  if (!text) {
+    await bot.sendMessage(chatId, ru.INVALID_PLAYBACK_SPEED);
+    return;
+  }
+  const speed = parseFloat(text);
+  if (isNaN(speed) || speed < 0.5 || speed > 3) {
+    await bot.sendMessage(chatId, ru.INVALID_PLAYBACK_SPEED);
+    return;
+  }
+  // Round to 2 decimals to keep values clean (e.g. 1.50 -> 1.5)
+  const rounded = Math.round(speed * 100) / 100;
+  session.playbackSpeed = rounded;
+  sessions.set(chatId, session);
+  if (Math.abs(rounded - 1) < 0.001) {
+    await bot.sendMessage(chatId, ru.PLAYBACK_SPEED_RESET);
+  } else {
+    await bot.sendMessage(chatId, ru.PLAYBACK_SPEED_SELECTED(`${rounded}x`));
+  }
   await showMainMenu(chatId, session, menuMessages.get(chatId));
   userStates.set(chatId, State.MAIN_MENU);
 }
