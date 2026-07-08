@@ -6,6 +6,7 @@ import { renderClipLocal } from './renderer-ffmpeg.js';
 import { generateScript } from './openai-llm.js';
 import { synthesizeTTS } from './elevenlabs-tts.js';
 import { probeDuration, proposeSegments } from './clipper.js';
+import { getActiveBackend } from './moment-detector.js';
 import { resolveAudioOnly } from './video-downloader.js';
 import { Storage } from '../storage/storage.js';
 import { writeSimpleSRT } from '../utils/subtitles.js';
@@ -194,6 +195,15 @@ export async function processTask(
       const totalDuration = await probeDuration(source);
       segments = [[0, totalDuration]];
     } else {
+      // top_moments mode — smart detection always works:
+      // OpenCV native binding if available, otherwise ffmpeg signalstats.
+      const backendLabel = getActiveBackend() === 'ffmpeg'
+        ? 'ffmpeg'
+        : 'OpenCV';
+      await bot.sendMessage(
+        chatId,
+        `🎬 Анализирую видео для поиска лучших моментов (${backendLabel}). Это займёт немного времени...`
+      );
       segments = await proposeSegments(source, clipCount, 15, 25);
     }
 

@@ -6,7 +6,7 @@ Node.js version of the TikTok video clip generation bot. This bot processes long
 
 - Download videos from YouTube, TikTok, or direct MP4 URLs
 - Multiple processing modes:
-  - **Top moments**: Automatically finds interesting segments
+  - **Top moments**: Content-aware highlight detection (see [Smart Moment Detection](#smart-moment-detection-opencv))
   - **Custom segment**: Manually specify start/end times
   - **Entire material**: Process the whole video
   - **Download only**: Download without processing
@@ -123,7 +123,8 @@ node-shorts/
 │   ├── config/           # Configuration settings
 │   ├── handlers/         # Telegram bot handlers
 │   ├── services/         # Business logic services
-│   │   ├── clipper.ts           # Video segment detection
+│   │   ├── clipper.ts           # Segment detection (OpenCV + fallback)
+│   │   ├── moment-detector.ts   # opencv4nodejs highlight analysis
 │   │   ├── renderer-ffmpeg.ts   # FFmpeg video rendering
 │   │   ├── openai-llm.ts        # OpenAI script generation
 │   │   ├── elevenlabs-tts.ts    # ElevenLabs TTS
@@ -171,6 +172,54 @@ See `.env.example` for all available configuration options:
    - Generates subtitles
    - Applies music overlay (optional)
 6. Bot sends completed clips back to user
+
+## Smart Moment Detection (OpenCV)
+
+The **Top moments** mode uses content-aware analysis via [`opencv4nodejs`](https://github.com/justadudewhohacks/opencv4nodejs) to find genuinely interesting segments instead of just slicing the timeline evenly.
+
+### How it scores frames
+
+For every sampled frame (default 2 fps, resized to 160px wide for speed), it computes:
+
+| Signal | Weight | Why |
+|--------|--------|-----|
+| **Motion** (mean absdiff vs previous frame) | 0.55 | Action, movement, highlights |
+| **Brightness** (mean luminance, gaussian peak @128) | 0.25 | Avoid dark/overexposed shots |
+| **Saturation** (HSV S-channel mean) | 0.20 | Vivid frames are more engaging |
+
+These per-frame scores are aggregated into sliding windows of ~20s. The top-N non-overlapping windows are selected greedily.
+
+### Smooth start & end
+
+To avoid cutting mid-action, boundaries are **snapped to the nearest detected scene cut** within ±3 seconds (scene cuts = strong local motion maxima, `mean + 2.5·σ`). Durations are then clamped to the 15–25s range.
+
+### Backend selection (automatic)
+
+The default and recommended backend is:
+
+1. **ffmpeg `signalstats`** — zero native dependencies; uses ffmpeg's built-in video analysis filter to compute motion (via `YDIF`), brightness (via `YAVG`), and saturation (via `SATAVG`). This is the out-of-the-box backend and the only one most users need.
+
+Optionally, a native backend can be used (faster for very long videos, equivalent results):
+
+2. **`opencv4nodejs`** / **`@u4/opencv4nodejs`** — native OpenCV bindings. **Both require a system OpenCV install and `cmake` to compile the native module** (neither ships truly prebuilt binaries despite some docs suggesting otherwise).
+
+Smart detection **always works** out of the box because backend #1 only requires ffmpeg (already a project prerequisite).
+
+### Installation (optional native OpenCV backend)
+
+> ⚠️ The native OpenCV backend is purely optional and requires a C++ build toolchain (`cmake`, a compiler, and system OpenCV libraries). You can skip this entirely — the ffmpeg `signalstats` backend is used by default and produces equivalent results.
+
+If you do want the native backend, install OpenCV 4.x and `cmake` first, then:
+
+```bash
+npm install opencv4nodejs
+```
+
+*Windows:* install OpenCV 4.x and set `OPENCV_DIR` (e.g. `set OPENCV_DIR=C:\opencv\build\x64\vc16`).
+*macOS:* `brew install opencv@4 cmake`
+*Linux:* `sudo apt install libopencv-dev python3-opencv cmake`
+
+If the native module fails to load, the detector automatically falls back to the **ffmpeg `signalstats` backend** (no extra installation) — smart detection still works.
 
 ## Troubleshooting
 
