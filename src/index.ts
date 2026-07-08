@@ -7,6 +7,7 @@ import { resolveSourceWithQuality } from './services/video-downloader.js';
 import { fetchTrendingHashtags } from './services/trends.js';
 import { parseAccountInput, fetchAccount, formatAccountReport } from './services/account-viewer.js';
 import { getT, translations, DEFAULT_LOCALE, type Locale } from './i18n/index.js';
+import { publishVideo, platformToPublishPlatform, CREDENTIAL_FIELDS, type PublishPlatform } from './services/publisher.js';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createWriteStream, createReadStream, statSync } from 'fs';
@@ -33,6 +34,10 @@ interface SessionData {
   audioOnly?: boolean;
   playbackSpeed?: number | null;
   platform?: string | null;
+  // Publishing flow state
+  publishCredId?: string;
+  addCredPlatform?: PublishPlatform | null;
+  addCredData?: Record<string, any>;
 }
 
 /**
@@ -57,7 +62,9 @@ enum State {
   AUDIO_SEGMENT = 7,
   PROCESSING = 8,
   ACCOUNT_INPUT = 9,
-  SPEED_INPUT = 10
+  SPEED_INPUT = 10,
+  PUBLISH_INPUT = 11,
+  CRED_LABEL_INPUT = 12
 }
 
 const userStates = new Map<number, State>();
@@ -133,7 +140,8 @@ async function showMainMenu(chatId: number, session: SessionData, editMessageId?
       [{ text: getTrimButtonText(t, session), callback_data: 'trim_menu' }],
       [{ text: getAudioMenuButtonText(t, session), callback_data: 'audio_menu' }],
       [{ text: getSpeedButtonText(t, session), callback_data: 'speed_menu' }],
-      [{ text: t.UPLOAD_BUTTON, callback_data: 'start_upload' }]
+      [{ text: t.UPLOAD_BUTTON, callback_data: 'start_upload' }],
+      [{ text: t.PUBLISH_BUTTON, callback_data: 'publish_menu' }]
     ]
   };
   if (editMessageId) {
@@ -249,6 +257,145 @@ async function showAutoModeMenu(chatId: number, session: SessionData): Promise<v
   sessions.set(chatId, session);
 }
 
+/**
+ * Show the publish menu — choose platform, add account, or view my accounts.
+ */
+async function showPublishMenu(chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
+  const messageId = menuMessages.get(chatId);
+  const text = t.PUBLISH_MENU_TITLE;
+  const keyboard: TelegramBot.InlineKeyboardMarkup = {
+    inline_keyboard: [
+      [{ text: `🎵 ${t.PLATFORM_TIKTOK}`, callback_data: 'pub_tiktok' }],
+      [{ text: `📸 ${t.PLATFORM_REELS}`, callback_data: 'pub_instagram' }],
+      [{ text: `▶️ ${t.PLATFORM_SHORTS}`, callback_data: 'pub_youtube' }],
+      [{ text: `${t.PUBLISH_MENU_ADD_CRED} (TikTok)`, callback_data: 'add_cred_tiktok' }],
+      [{ text: `${t.PUBLISH_MENU_ADD_CRED} (Instagram)`, callback_data: 'add_cred_instagram' }],
+      [{ text: `${t.PUBLISH_MENU_ADD_CRED} (YouTube)`, callback_data: 'add_cred_youtube' }],
+      [{ text: t.PUBLISH_MENU_MY_ACCOUNTS, callback_data: 'pub_my_accounts' }],
+      [{ text: t.BACK_BUTTON, callback_data: 'back_to_main' }]
+    ]
+  };
+  if (messageId) {
+    try {
+      await bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: keyboard });
+    } catch {
+      const msg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
+      menuMessages.set(chatId, msg.message_id);
+    }
+  } else {
+    const msg = await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: keyboard });
+    menuMessages.set(chatId, msg.message_id);
+  }
+  sessions.set(chatId, session);
+}
+
+/** Format the credential field prompt text for a platform. */
+function formatCredFieldPrompt(platform: PublishPlatform): string {
+  const fields = CREDENTIAL_FIELDS[platform];
+  return fields.map(f => `- ${f.key} (${f.label})${f.required ? ' *' : ''}`).join('\n');
+}
+
+/** Parse credential input: either JSON or key:value lines. */
+function parseCredInput(text: string): Record<string, any> | null {
+  const trimmed = text.trim();
+  // Try JSON first
+  if (trimmed.startsWith('{')) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }
+  // Try key:value lines
+  const result: Record<string, any> = {};
+  const lines = trimmed.split('\n');
+  for (const line of lines) {
+    const idx = line.indexOf(':');
+    if (idx <= 0) continue;
+    const key = line.slice(0, idx).trim();
+    const val = line.slice(idx + 1).trim();
+    if (key) result[key] = val;
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+/**
+ * Show saved accounts for a platform and let the user pick one to publish.
+ */
+async function showPublishAccountPicker(chatId: number, platform: PublishPlatform, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
+  const creds = await storage.getCredentials(chatId, platform);
+  const platformLabel = platform === 'tiktok' ? t.PLATFORM_TIKTOK : platform === 'instagram' ? t.PLATFORM_REELS : t.PLATFORM_SHORTS;
+  if (creds.length === 0) {
+    await bot.sendMessage(chatId, t.PUBLISH_NO_ACCOUNTS(platformLabel));
+    await showPublishMenu(chatId, session);
+    return;
+  }
+  const rows: TelegramBot.InlineKeyboardButton[][] = creds.map(c => [
+    { text: `📤 ${c.label} (${c.platform})`, callback_data: `pub_cred_${c.id}` }
+  ]);
+  rows.push([{ text: t.BACK_BUTTON, callback_data: 'publish_menu' }]);
+  await bot.sendMessage(chatId, t.PUBLISH_SELECT_ACCOUNT(platformLabel), {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: rows } as any
+  });
+  sessions.set(chatId, session);
+}
+
+/**
+ * Show all saved accounts with delete buttons.
+ */
+async function showMyAccounts(chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
+  const creds = await storage.getCredentials(chatId);
+  if (creds.length === 0) {
+    await bot.sendMessage(chatId, t.PUBLISH_NO_CREDS);
+    await showPublishMenu(chatId, session);
+    return;
+  }
+  const lines = creds.map((c, i) => `${i + 1}) ${c.label} — ${c.platform}`);
+  const rows: TelegramBot.InlineKeyboardButton[][] = creds.map(c => [
+    { text: `🗑 ${c.label} (${c.platform})`, callback_data: `del_cred_${c.id}` }
+  ]);
+  rows.push([{ text: t.BACK_BUTTON, callback_data: 'publish_menu' }]);
+  await bot.sendMessage(chatId, `${t.PUBLISH_LIST_TITLE}\n\n${lines.join('\n')}`, {
+    parse_mode: 'Markdown',
+    reply_markup: { inline_keyboard: rows } as any
+  });
+  sessions.set(chatId, session);
+}
+
+/**
+ * Actually publish a clip to a platform. Reads credential by id and calls the publisher.
+ */
+async function doPublish(chatId: number, credId: string, videoPath: string, caption: string): Promise<void> {
+  const t = getChatT(chatId);
+  const cred = await storage.getCredentialById(credId);
+  if (!cred || cred.userId !== chatId) {
+    await bot.sendMessage(chatId, t.PUBLISH_FAILED('account not found'));
+    return;
+  }
+  const platform = cred.platform as PublishPlatform;
+  const platformLabel = platform === 'tiktok' ? t.PLATFORM_TIKTOK : platform === 'instagram' ? t.PLATFORM_REELS : t.PLATFORM_SHORTS;
+  await bot.sendMessage(chatId, t.PUBLISH_STARTED);
+  const result = await publishVideo({
+    platform,
+    videoPath,
+    caption,
+    credential: cred,
+    onProgress: async (msg) => {
+      await bot.sendMessage(chatId, t.PUBLISH_PROGRESS(msg));
+    }
+  });
+  if (result.success) {
+    await bot.sendMessage(chatId, t.PUBLISH_SUCCESS(result.message));
+  } else {
+    await bot.sendMessage(chatId, t.PUBLISH_FAILED(result.message));
+  }
+  await bot.sendMessage(chatId, t.PUBLISH_DONE);
+}
+
 async function startUpload(chatId: number, session: SessionData): Promise<void> {
   const t = getChatT(chatId);
   if (!session.trimMode && !session.audioOnly) {
@@ -323,6 +470,25 @@ bot.on('callback_query', async (query) => {
 
   try {
     if (!data) {
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+    // Dynamic callback handlers for publish/delete credential actions
+    if (data.startsWith('pub_cred_')) {
+      const credId = data.replace('pub_cred_', '');
+      session.publishCredId = credId;
+      // Ask for the video path + caption to publish
+      await bot.sendMessage(chatId, '📎 Send the video file or reply with the clip path to publish.');
+      userStates.set(chatId, State.PUBLISH_INPUT);
+      sessions.set(chatId, session);
+      await bot.answerCallbackQuery(query.id);
+      return;
+    }
+    if (data.startsWith('del_cred_')) {
+      const credId = data.replace('del_cred_', '');
+      await storage.deleteCredential(credId, chatId);
+      await bot.sendMessage(chatId, t.PUBLISH_CRED_DELETED);
+      await showMyAccounts(chatId, session);
       await bot.answerCallbackQuery(query.id);
       return;
     }
@@ -411,6 +577,34 @@ bot.on('callback_query', async (query) => {
       case 'start_upload':
         await startUpload(chatId, session);
         break;
+      // --- Publishing flow ---
+      case 'publish_menu':
+        await showPublishMenu(chatId, session);
+        break;
+      case 'pub_my_accounts':
+        await showMyAccounts(chatId, session);
+        break;
+      case 'pub_tiktok':
+      case 'pub_instagram':
+      case 'pub_youtube': {
+        const platform = data.replace('pub_', '') as PublishPlatform;
+        // If we have a finished clip path in session, go to account picker
+        // Otherwise prompt to add account / choose account
+        await showPublishAccountPicker(chatId, platform, session);
+        break;
+      }
+      case 'add_cred_tiktok':
+      case 'add_cred_instagram':
+      case 'add_cred_youtube': {
+        const platform = data.replace('add_cred_', '') as PublishPlatform;
+        session.addCredPlatform = platform;
+        const platformLabel = platform === 'tiktok' ? t.PLATFORM_TIKTOK : platform === 'instagram' ? t.PLATFORM_REELS : t.PLATFORM_SHORTS;
+        await bot.sendMessage(chatId, t.PUBLISH_ADD_TITLE(platformLabel), { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, t.PUBLISH_ADD_PROMPT(formatCredFieldPrompt(platform)), { parse_mode: 'Markdown' });
+        userStates.set(chatId, State.PUBLISH_INPUT);
+        sessions.set(chatId, session);
+        break;
+      }
       case 'accounts':
         await bot.sendMessage(chatId, t.ACCOUNTS_PROMPT, { parse_mode: 'Markdown' });
         userStates.set(chatId, State.ACCOUNT_INPUT);
@@ -539,6 +733,8 @@ bot.on('message', async (msg) => {
       case State.SPEED_INPUT: await handleSpeedInput(msg, chatId, session); break;
       case State.AUDIO_SEGMENT: await handleAudioSegment(msg, chatId, session); break;
       case State.ACCOUNT_INPUT: await handleAccountInput(msg, chatId); break;
+      case State.PUBLISH_INPUT: await handlePublishInput(msg, chatId, session); break;
+      case State.CRED_LABEL_INPUT: await handleCredLabelInput(msg, chatId, session); break;
     }
   } catch (error) {
     await bot.sendMessage(chatId, `${t.ERROR_GENERIC}: ${error}`);
@@ -553,10 +749,35 @@ bot.on('video', async (msg) => {
     await bot.sendMessage(chatId, t.ALREADY_PROCESSING);
     return;
   }
-  resetSession(chatId);
   const session = sessions.get(chatId) || {};
   const video = msg.video;
   if (!video) return;
+  // Publish flow: if the user has selected an account (publishCredId) and sends a video,
+  // save it and publish immediately.
+  if (state === State.PUBLISH_INPUT && session.publishCredId) {
+    await bot.sendMessage(chatId, t.VIDEO_RECEIVED_DOWNLOADING);
+    try {
+      const fileLink = await bot.getFileLink(video.file_id);
+      const fileName = `pub_${chatId}_${Date.now()}.mp4`;
+      const filePath = path.join(settings.TMP_DIR, fileName);
+      const response = await fetch(fileLink);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      await fs.writeFile(filePath, buffer);
+      const caption = msg.caption || session.trendChoice || '';
+      const credId = session.publishCredId;
+      session.publishCredId = undefined;
+      sessions.set(chatId, session);
+      userStates.set(chatId, State.MAIN_MENU);
+      await doPublish(chatId, credId || '', filePath, caption);
+      // Clean up the temp file after publishing
+      await fs.unlink(filePath).catch(() => {});
+    } catch (error) {
+      await bot.sendMessage(chatId, `${t.ERROR_GENERIC}: ${error}`);
+    }
+    return;
+  }
+  resetSession(chatId);
+  const freshSession = sessions.get(chatId) || {};
   if (video.file_size && video.file_size > settings.MAX_SOURCE_MB * 1024 * 1024) {
     await bot.sendMessage(chatId, t.TOO_LARGE.replace('{max_mb}', settings.MAX_SOURCE_MB.toString()));
     return;
@@ -569,12 +790,12 @@ bot.on('video', async (msg) => {
     const response = await fetch(fileLink);
     const buffer = Buffer.from(await response.arrayBuffer());
     await fs.writeFile(filePath, buffer);
-    session.sourcePath = filePath;
-    sessions.set(chatId, session);
+    freshSession.sourcePath = filePath;
+    sessions.set(chatId, freshSession);
     await bot.sendMessage(chatId, t.SOURCE_RECEIVED);
-    await showMainMenu(chatId, session);
+    await showMainMenu(chatId, freshSession);
     userStates.set(chatId, State.MAIN_MENU);
-    sessions.set(chatId, session);
+    sessions.set(chatId, freshSession);
   } catch (error) {
     await bot.sendMessage(chatId, `${t.ERROR_GENERIC}: ${error}`);
   }
@@ -733,6 +954,95 @@ async function handleAccountInput(msg: any, chatId: number): Promise<void> {
   } catch (error: any) {
     await bot.sendMessage(chatId, `❌ ${error?.message || t.ERROR_GENERIC}`);
   }
+}
+
+/**
+ * Handle the publish input state:
+ * - If the user has a `publishCredId` set, this is the video path + caption to publish.
+ * - Otherwise, this is the credential data being entered for a new account.
+ */
+async function handlePublishInput(msg: any, chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
+  const text = msg.text?.trim();
+
+  // Case 1: Publishing a clip with an already-selected credential
+  if (session.publishCredId) {
+    if (!text) {
+      await bot.sendMessage(chatId, '⚠️ Please send the clip file path or upload a video.');
+      return;
+    }
+    const videoPath = text;
+    try {
+      await fs.access(videoPath);
+    } catch {
+      await bot.sendMessage(chatId, t.PUBLISH_FAILED(`file not found: ${videoPath}`));
+      return;
+    }
+    const caption = session.trendChoice || '';
+    const credId = session.publishCredId;
+    session.publishCredId = undefined;
+    sessions.set(chatId, session);
+    userStates.set(chatId, State.MAIN_MENU);
+    await doPublish(chatId, credId || '', videoPath, caption);
+    return;
+  }
+
+  // Case 2: Adding new credential data
+  if (!session.addCredPlatform) {
+    await bot.sendMessage(chatId, t.PUBLISH_ADD_INVALID);
+    return;
+  }
+  if (!text) {
+    await bot.sendMessage(chatId, t.PUBLISH_ADD_INVALID);
+    return;
+  }
+  const parsed = parseCredInput(text);
+  if (!parsed) {
+    await bot.sendMessage(chatId, t.PUBLISH_ADD_INVALID);
+    return;
+  }
+  // Validate required fields are present
+  const fields = CREDENTIAL_FIELDS[session.addCredPlatform];
+  const missing = fields.filter(f => f.required && !parsed[f.key]);
+  if (missing.length > 0) {
+    await bot.sendMessage(chatId, t.PUBLISH_ADD_INVALID);
+    return;
+  }
+  // Save the parsed data and ask for the label
+  session.addCredData = parsed;
+  sessions.set(chatId, session);
+  await bot.sendMessage(chatId, t.PUBLISH_ASK_LABEL);
+  userStates.set(chatId, State.CRED_LABEL_INPUT);
+}
+
+/**
+ * Handle the label input when saving a new credential.
+ */
+async function handleCredLabelInput(msg: any, chatId: number, session: SessionData): Promise<void> {
+  const t = getChatT(chatId);
+  const label = msg.text?.trim();
+  if (!label) {
+    await bot.sendMessage(chatId, t.PUBLISH_ASK_LABEL);
+    return;
+  }
+  if (!session.addCredPlatform || !session.addCredData) {
+    await bot.sendMessage(chatId, t.PUBLISH_ADD_INVALID);
+    userStates.set(chatId, State.MAIN_MENU);
+    return;
+  }
+  await storage.saveCredential({
+    userId: chatId,
+    platform: session.addCredPlatform,
+    label,
+    credentials: session.addCredData
+  });
+  // Clear temp state
+  session.addCredPlatform = null;
+  session.addCredData = undefined;
+  sessions.set(chatId, session);
+  await bot.sendMessage(chatId, t.PUBLISH_ADD_SUCCESS(label));
+  await showPublishMenu(chatId, session);
+  userStates.set(chatId, State.MAIN_MENU);
 }
 
 async function handleAudioSegment(msg: any, chatId: number, session: SessionData): Promise<void> {

@@ -152,4 +152,29 @@ export interface Translations {
   REPORT_FOLLOWERS: string;
   REPORT_VIDEOS: string;
   REPORT_NA: string;
+
+  // Publishing (cross-posting to TikTok/Instagram/YouTube)
+  PUBLISH_BUTTON: string;
+  PUBLISH_MENU_TITLE: string;
+  PUBLISH_NO_ACCOUNTS: (platformLabel: string) => string;
+  PUBLISH_SELECT_ACCOUNT: (platformLabel: string) => string;
+  PUBLISH_SELECT_PLATFORM: string;
+  PUBLISH_MENU_ADD_CRED: string;
+  PUBLISH_MENU_MY_ACCOUNTS: string;
+  PUBLISH_ADD_TITLE: (platformLabel: string) => string;
+  PUBLISH_ADD_PROMPT: (fields: string) => string;
+  PUBLISH_ADD_SUCCESS: (label: string) => string;
+  PUBLISH_ADD_INVALID: string;
+  PUBLISH_ASK_LABEL: string;
+  PUBLISH_CRED_DELETED: string;
+  PUBLISH_NO_CREDS: string;
+  PUBLISH_LIST_TITLE: string;
+  PUBLISH_LABEL_LABEL: string;
+  PUBLISH_STARTED: string;
+  PUBLISH_PROGRESS: (message: string) => string;
+  PUBLISH_SUCCESS: (message: string) => string;
+  PUBLISH_FAILED: (message: string) => string;
+  PUBLISH_DONE: string;
+  PUBLISH_AFTER_CLIP_PROMPT: string;
+  PUBLISH_CLIP_PROMPT: (platformLabel: string) => string;
 }

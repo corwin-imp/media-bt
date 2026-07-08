@@ -202,6 +202,31 @@ export const ru: Translations = {
   REPORT_FOLLOWERS: 'підписників',
   REPORT_VIDEOS: 'відео',
   REPORT_NA: 'Н/Д',
+
+  // Publishing (cross-posting to TikTok/Instagram/YouTube)
+  PUBLISH_BUTTON: '📤 Опубликовать',
+  PUBLISH_MENU_TITLE: '📤 *Публикация в соцсети*\n\nВыберите платформу, куда отправить готовый клип:',
+  PUBLISH_NO_ACCOUNTS: (platformLabel: string) => `Нет сохранённых аккаунтов для ${platformLabel}. Сначала добавьте через «Мои аккаунты».`,
+  PUBLISH_SELECT_ACCOUNT: (platformLabel: string) => `Выберите аккаунт для публикации в ${platformLabel}:`,
+  PUBLISH_SELECT_PLATFORM: 'Выберите платформу:',
+  PUBLISH_MENU_ADD_CRED: '➕ Добавить аккаунт',
+  PUBLISH_MENU_MY_ACCOUNTS: '📋 Мои аккаунты',
+  PUBLISH_ADD_TITLE: (platformLabel: string) => `➕ *Добавить аккаунт ${platformLabel}*\n\nПонадобятся API-ключи/токены.`,
+  PUBLISH_ADD_PROMPT: (fields: string) => `Пришлите значения в виде JSON или key:value на отдельных строках.\nОбязательные поля:\n${fields}`,
+  PUBLISH_ADD_SUCCESS: (label: string) => `✅ Аккаунт «${label}» сохранён.`,
+  PUBLISH_ADD_INVALID: 'Неверный формат. Пришлите поля как JSON или key:value на отдельных строках.',
+  PUBLISH_ASK_LABEL: 'Какое название показать для этого аккаунта? (например, «Основной TikTok»)',
+  PUBLISH_CRED_DELETED: '🗑 Аккаунт удалён.',
+  PUBLISH_NO_CREDS: 'У вас пока нет сохранённых аккаунтов.',
+  PUBLISH_LIST_TITLE: '📋 *Ваши аккаунты*',
+  PUBLISH_LABEL_LABEL: 'Название',
+  PUBLISH_STARTED: '🚀 Начинаю публикацию...',
+  PUBLISH_PROGRESS: (message: string) => `⏳ ${message}`,
+  PUBLISH_SUCCESS: (message: string) => `✅ ${message}`,
+  PUBLISH_FAILED: (message: string) => `❌ Ошибка публикации: ${message}`,
+  PUBLISH_DONE: 'Публикация завершена.',
+  PUBLISH_AFTER_CLIP_PROMPT: 'Хотите опубликовать этот клип в соцсеть?',
+  PUBLISH_CLIP_PROMPT: (platformLabel: string) => `📤 Опубликовать этот клип в ${platformLabel}?`,
 };
 
 export default ru;

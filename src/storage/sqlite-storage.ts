@@ -2,7 +2,41 @@ import Database from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { Storage, CreateTaskParams, Task, Result } from './storage.js';
+import crypto from 'crypto';
+import { Storage, CreateTaskParams, Task, Result, SocialCredential, SaveCredentialParams } from './storage.js';
+
+/**
+ * Credentials encryption helpers.
+ * Uses AES-256-GCM with a key derived from CREDS_ENCRYPTION_KEY env var
+ * (or a fallback derived from the Telegram token when not set).
+ */
+function getEncryptionKey(): Buffer {
+  const secret = process.env.CREDS_ENCRYPTION_KEY || process.env.TOKEN || 'node-shorts-default-key';
+  return crypto.createHash('sha256').update(String(secret)).digest();
+}
+
+function encryptJSON(data: Record<string, any>): string {
+  const key = getEncryptionKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const json = JSON.stringify(data);
+  const encrypted = Buffer.concat([cipher.update(json, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  // Pack as: iv(12) || tag(16) || ciphertext
+  return Buffer.concat([iv, tag, encrypted]).toString('base64');
+}
+
+function decryptJSON(packed: string): Record<string, any> {
+  const key = getEncryptionKey();
+  const buf = Buffer.from(packed, 'base64');
+  const iv = buf.subarray(0, 12);
+  const tag = buf.subarray(12, 28);
+  const encrypted = buf.subarray(28);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+  return JSON.parse(decrypted.toString('utf8'));
+}
 
 export class SQLiteStorage implements Storage {
   private db: Database.Database;
@@ -89,6 +123,19 @@ export class SQLiteStorage implements Storage {
         caption TEXT
       )
     `);
+
+    // Social credentials table (encrypted JSON)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS social_credentials (
+        id TEXT PRIMARY KEY,
+        user_id INTEGER,
+        platform TEXT,
+        label TEXT,
+        credentials BLOB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_creds_user ON social_credentials(user_id)`);
   }
 
   private getColumnInfo(tableName: string): string[] {
@@ -131,7 +178,7 @@ export class SQLiteStorage implements Storage {
       playbackSpeed: params.playbackSpeed ?? null,
       platform: params.platform ?? null,
       status: 'queued',
-      meta: JSON.stringify({})
+      meta: JSON.stringify(params.meta ?? {})
     });
 
     return taskId;
@@ -204,6 +251,72 @@ export class SQLiteStorage implements Storage {
       clipPath: row.clip_path,
       caption: row.caption
     }));
+  }
+
+  // --- Social credentials ---
+
+  async saveCredential(params: SaveCredentialParams): Promise<string> {
+    const id = uuidv4();
+    const encrypted = encryptJSON(params.credentials);
+    const stmt = this.db.prepare(`
+      INSERT INTO social_credentials (id, user_id, platform, label, credentials)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    stmt.run(id, params.userId, params.platform, params.label, encrypted);
+    return id;
+  }
+
+  async getCredentials(userId: number, platform?: string): Promise<SocialCredential[]> {
+    const sql = platform
+      ? `SELECT id, user_id, platform, label, credentials, created_at FROM social_credentials WHERE user_id = ? AND platform = ? ORDER BY created_at DESC`
+      : `SELECT id, user_id, platform, label, credentials, created_at FROM social_credentials WHERE user_id = ? ORDER BY created_at DESC`;
+    const stmt = this.db.prepare(sql);
+    const rows = (platform ? stmt.all(userId, platform) : stmt.all(userId)) as Array<{
+      id: string;
+      user_id: number;
+      platform: string;
+      label: string;
+      credentials: string;
+      created_at: string;
+    }>;
+    return rows.map(row => ({
+      id: row.id,
+      userId: row.user_id,
+      platform: row.platform,
+      label: row.label,
+      credentials: decryptJSON(row.credentials),
+      createdAt: row.created_at
+    }));
+  }
+
+  async getCredentialById(id: string): Promise<SocialCredential | null> {
+    const stmt = this.db.prepare(`
+      SELECT id, user_id, platform, label, credentials, created_at FROM social_credentials WHERE id = ?
+    `);
+    const row = stmt.get(id) as
+      | {
+          id: string;
+          user_id: number;
+          platform: string;
+          label: string;
+          credentials: string;
+          created_at: string;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      id: row.id,
+      userId: row.user_id,
+      platform: row.platform,
+      label: row.label,
+      credentials: decryptJSON(row.credentials),
+      createdAt: row.created_at
+    };
+  }
+
+  async deleteCredential(id: string, userId: number): Promise<void> {
+    const stmt = this.db.prepare(`DELETE FROM social_credentials WHERE id = ? AND user_id = ?`);
+    stmt.run(id, userId);
   }
 
   close(): void {

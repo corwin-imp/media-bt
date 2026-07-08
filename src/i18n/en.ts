@@ -202,6 +202,31 @@ export const en: Translations = {
   REPORT_FOLLOWERS: 'followers',
   REPORT_VIDEOS: 'videos',
   REPORT_NA: 'N/A',
+
+  // Publishing (cross-posting to TikTok/Instagram/YouTube)
+  PUBLISH_BUTTON: '📤 Publish',
+  PUBLISH_MENU_TITLE: '📤 *Publish to social media*\n\nChoose a platform to post the finished clip to:',
+  PUBLISH_NO_ACCOUNTS: (platformLabel: string) => `No saved accounts for ${platformLabel}. Add one first via "My accounts".`,
+  PUBLISH_SELECT_ACCOUNT: (platformLabel: string) => `Select an account to publish to ${platformLabel}:`,
+  PUBLISH_SELECT_PLATFORM: 'Choose a platform:',
+  PUBLISH_MENU_ADD_CRED: '➕ Add account',
+  PUBLISH_MENU_MY_ACCOUNTS: '📋 My accounts',
+  PUBLISH_ADD_TITLE: (platformLabel: string) => `➕ *Add ${platformLabel} account*\n\nYou will need API credentials.`,
+  PUBLISH_ADD_PROMPT: (fields: string) => `Send the values as JSON or key:value on separate lines.\nRequired fields:\n${fields}`,
+  PUBLISH_ADD_SUCCESS: (label: string) => `✅ Account "${label}" saved.`,
+  PUBLISH_ADD_INVALID: 'Invalid format. Send the fields as JSON or key:value on separate lines.',
+  PUBLISH_ASK_LABEL: 'What name to show for this account? (e.g. "Main TikTok")',
+  PUBLISH_CRED_DELETED: '🗑 Account deleted.',
+  PUBLISH_NO_CREDS: 'You have no saved accounts yet.',
+  PUBLISH_LIST_TITLE: '📋 *Your accounts*',
+  PUBLISH_LABEL_LABEL: 'Name',
+  PUBLISH_STARTED: '🚀 Starting publish...',
+  PUBLISH_PROGRESS: (message: string) => `⏳ ${message}`,
+  PUBLISH_SUCCESS: (message: string) => `✅ ${message}`,
+  PUBLISH_FAILED: (message: string) => `❌ Publish failed: ${message}`,
+  PUBLISH_DONE: 'Publish flow finished.',
+  PUBLISH_AFTER_CLIP_PROMPT: 'Want to publish this clip to a social platform?',
+  PUBLISH_CLIP_PROMPT: (platformLabel: string) => `📤 Publish this clip to ${platformLabel}?`,
 };
 
 export default en;

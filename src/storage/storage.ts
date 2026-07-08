@@ -1,9 +1,31 @@
+export interface SocialCredential {
+  id: string;
+  userId: number;
+  platform: string;
+  label: string;
+  credentials: Record<string, any>;
+  createdAt: string;
+}
+
 export interface Storage {
   createTask(params: CreateTaskParams): Promise<string>;
   updateTaskStatus(taskId: string, status: string, meta?: Record<string, any>): Promise<void>;
   addResultClip(taskId: string, clipPath: string, caption: string): Promise<void>;
   getTask(taskId: string): Promise<Task>;
   getResults(taskId: string): Promise<Result[]>;
+
+  // Social credentials (for publishing to TikTok/Instagram/YouTube)
+  saveCredential(params: SaveCredentialParams): Promise<string>;
+  getCredentials(userId: number, platform?: string): Promise<SocialCredential[]>;
+  getCredentialById(id: string): Promise<SocialCredential | null>;
+  deleteCredential(id: string, userId: number): Promise<void>;
+}
+
+export interface SaveCredentialParams {
+  userId: number;
+  platform: string;
+  label: string;
+  credentials: Record<string, any>;
 }
 
 export interface CreateTaskParams {
@@ -21,6 +43,8 @@ export interface CreateTaskParams {
   quality?: number | null;
   playbackSpeed?: number | null;
   platform?: string | null;
+  /** Arbitrary metadata (e.g. publishTo credential id for cross-posting). */
+  meta?: Record<string, any>;
 }
 
 export interface Task {
