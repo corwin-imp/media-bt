@@ -1,0 +1,41 @@
+{
+  "name": "node-shorts",
+  "version": "1.0.0",
+  "description": "Telegram bot for creating short video clips",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "watch": "tsx watch src/index.ts"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "video",
+    "clips"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "node-telegram-bot-api": "^0.66.0",
+    "better-sqlite3": "^11.5.0",
+    "openai": "^4.67.3",
+    "axios": "^1.7.8",
+    "fluent-ffmpeg": "^2.1.2",
+    "ytdl-core": "^4.11.5",
+    "winston": "^3.17.0",
+    "uuid": "^11.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/fluent-ffmpeg": "^2.1.27",
+    "@types/node": "^22.10.2",
+    "@types/node-telegram-bot-api": "^0.64.7",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
