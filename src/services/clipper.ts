@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import {
   detectTopMoments,
   getActiveBackend,
+  getOpenCVLoadError,
   isOpenCVAvailable,
 } from './moment-detector.js';
 
@@ -98,9 +99,12 @@ export async function proposeSegments(
     // ffmpeg signalstats is the default, zero-dependency backend. A native
     // opencv4nodejs binding is optional (needs system OpenCV + cmake to build)
     // and only speeds up very long videos; results are equivalent without it.
+    const reason = getOpenCVLoadError();
     console.log(
-      `[clipper] Using ffmpeg signalstats analyzer for moment detection` +
-      ` (native opencv4nodejs is optional and not installed).`
+      `[clipper] opencv4nodejs not available` +
+      (reason ? ` (${reason.split('\n')[0]})` : '') +
+      `. Using ffmpeg signalstats analyzer for moment detection ` +
+      `(native opencv is optional).`
     );
   }
 

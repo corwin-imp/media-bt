@@ -7,7 +7,7 @@ import { generateScript } from './openai-llm.js';
 import { synthesizeTTS } from './elevenlabs-tts.js';
 import { probeDuration, proposeSegments } from './clipper.js';
 import { getActiveBackend } from './moment-detector.js';
-import { resolveAudioOnly } from './video-downloader.js';
+import { resolveAudioOnly, extractAudioSegment } from './video-downloader.js';
 import { Storage } from '../storage/storage.js';
 import { writeSimpleSRT } from '../utils/subtitles.js';
 import { settings } from '../config/settings.js';
@@ -168,6 +168,77 @@ export async function processTask(
         await bot.sendMessage(chatId, `❌ Ошибка отправки аудио: ${error}`);
       } finally {
         // Clean up extracted audio and source video from tmp after sending
+        await cleanupFiles([audioPath, source]);
+      }
+      await storage.updateTaskStatus(taskId, 'done', {});
+      return;
+    }
+
+    
+    // Audio from segment mode - extract audio from specific time range
+    if (mode === 'audio_from_segment') {
+      const segStartTime = task.startTime;
+      const segEndTime = task.endTime;
+      
+      // Debug: log task data
+      console.log('DEBUG audio_from_segment task:', {
+        taskId: task.id,
+        sourcePath: task.sourcePath,
+        sourcePathType: typeof task.sourcePath,
+        sourceUrl: task.sourceUrl,
+        startTime: segStartTime,
+        endTime: segEndTime
+      });
+      
+      if (segStartTime === null || segStartTime === undefined || segEndTime === null || segEndTime === undefined) {
+        await bot.sendMessage(chatId, '❌ Ошибка: не указан временной интервал для извлечения аудио.');
+        await storage.updateTaskStatus(taskId, 'failed', {});
+        return;
+      }
+      
+      // Validate source path exists and is a proper string
+      if (!source || typeof source !== 'string' || source.trim() === '') {
+        console.error('Invalid source path for audio extraction:', { source, type: typeof source, constructor: source?.constructor?.name });
+        await bot.sendMessage(chatId, '❌ Ошибка: исходный файл не найден. Возможно, видео не было загружено. Попробуйте отправить видео заново.');
+        await storage.updateTaskStatus(taskId, 'failed', {});
+        return;
+      }
+      
+      // Verify the source file exists
+      try {
+        await fs.access(source);
+      } catch {
+        console.error('Source file not found:', source);
+        await bot.sendMessage(chatId, '❌ Ошибка: файл видео не найден. Возможно, он был удален. Попробуйте отправить видео заново.');
+        await storage.updateTaskStatus(taskId, 'failed', {});
+        return;
+      }
+      
+      const formatTime = (s: number): string => {
+        const mins = Math.floor(s / 60);
+        const secs = s % 60;
+        return mins + ':' + secs.toString().padStart(2, '0');
+      };
+      
+      await bot.sendMessage(chatId, '🎵 Извлекаю аудио из интервала ' + formatTime(segStartTime) + ' - ' + formatTime(segEndTime) + '...');
+      let audioPath: string | null = null;
+      try {
+        audioPath = await extractAudioSegment(source, segStartTime, segEndTime, settings.TMP_DIR);
+        
+        const stats = await fs.stat(audioPath);
+        const fileSizeMB = stats.size / (1024 * 1024);
+        
+        if (fileSizeMB > 50) {
+          await bot.sendMessage(chatId, '❌ Аудио слишком большое (' + fileSizeMB.toFixed(1) + 'MB)');
+        } else {
+          const audioStream = createReadStream(audioPath);
+          await bot.sendAudio(chatId, audioStream, 'Аудио извлечено из интервала ' + formatTime(segStartTime) + '-' + formatTime(segEndTime));
+          await bot.sendMessage(chatId, '✅ Обработка завершена! Напишите /start, чтобы создать новое видео.');
+        }
+      } catch (error) {
+        console.error('Error extracting audio segment:', error);
+        await bot.sendMessage(chatId, '❌ Ошибка извлечения аудио: ' + error);
+      } finally {
         await cleanupFiles([audioPath, source]);
       }
       await storage.updateTaskStatus(taskId, 'done', {});
