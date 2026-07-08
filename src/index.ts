@@ -470,8 +470,26 @@ class TelegramBotWrapper {
   private bot: TelegramBot;
   constructor(bot: TelegramBot) { this.bot = bot; }
   async sendMessage(chatId: number, text: string): Promise<void> { await this.bot.sendMessage(chatId, text); }
-  async sendVideo(chatId: number, videoPath: string, caption?: string): Promise<void> { await this.bot.sendVideo(chatId, createReadStream(videoPath), { caption }); }
-  async sendAudio(chatId: number, audioPath: string, caption?: string): Promise<void> { await this.bot.sendAudio(chatId, createReadStream(audioPath), { caption }); }
+  async sendVideo(chatId: number, video: string | any, caption?: string): Promise<void> {
+    const options: any = {};
+    if (caption) options.caption = caption;
+    if (typeof video === 'string') {
+      await this.bot.sendVideo(chatId, createReadStream(video), options);
+    } else {
+      if (video && typeof video === 'object' && video.path) options.filename = 'clip.mp4';
+      await this.bot.sendVideo(chatId, video, options);
+    }
+  }
+  async sendAudio(chatId: number, audio: string | any, caption?: string): Promise<void> {
+    const options: any = {};
+    if (caption) options.caption = caption;
+    if (typeof audio === 'string') {
+      await this.bot.sendAudio(chatId, createReadStream(audio), options);
+    } else {
+      if (audio && typeof audio === 'object' && audio.path) options.filename = 'audio.mp3';
+      await this.bot.sendAudio(chatId, audio, options);
+    }
+  }
 }
 
 function isValidUrl(text: string): boolean {
