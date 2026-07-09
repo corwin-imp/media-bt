@@ -200,10 +200,14 @@ export const ru: Translations = {
   REPORT_UPLOADED: 'Загружено',
   REPORT_PLATFORM: 'Платформа',
   REPORT_SHADOWBAN: 'Теневой бан',
-  REPORT_TOTAL_STATS: 'Общая статистика аккаунта',
+  REPORT_SHADOWBAN_YES: '🚫 Да',
+  REPORT_SHADOWBAN_NO: '✅ Нет',
+  REPORT_TOTAL_STATS: 'Информация об аккаунте',
   REPORT_FOLLOWERS: 'подписчиков',
   REPORT_VIDEOS: 'видео',
   REPORT_NA: 'Н/Д',
+  REPORT_TOTAL_LIKES: 'всего лайков',
+  REPORT_SAMPLE_STATS: 'Последние видео',
 };
 
 export default ru;

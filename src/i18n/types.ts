@@ -150,8 +150,12 @@ export interface Translations {
   REPORT_UPLOADED: string;
   REPORT_PLATFORM: string;
   REPORT_SHADOWBAN: string;
+  REPORT_SHADOWBAN_YES: string;
+  REPORT_SHADOWBAN_NO: string;
   REPORT_TOTAL_STATS: string;
   REPORT_FOLLOWERS: string;
   REPORT_VIDEOS: string;
   REPORT_NA: string;
+  REPORT_TOTAL_LIKES: string;
+  REPORT_SAMPLE_STATS: string;
 }

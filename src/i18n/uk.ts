@@ -200,10 +200,14 @@ export const uk: Translations = {
   REPORT_UPLOADED: 'Завантажено о',
   REPORT_PLATFORM: 'Платформа',
   REPORT_SHADOWBAN: 'Тіньовий бан',
-  REPORT_TOTAL_STATS: 'Загальна статистика акаунту',
+  REPORT_SHADOWBAN_YES: '🚫 Так',
+  REPORT_SHADOWBAN_NO: '✅ Ні',
+  REPORT_TOTAL_STATS: 'Інформація про акаунт',
   REPORT_FOLLOWERS: 'підписників',
   REPORT_VIDEOS: 'відео',
   REPORT_NA: 'Н/Д',
+  REPORT_TOTAL_LIKES: 'всього лайків',
+  REPORT_SAMPLE_STATS: 'Останні відео',
 };
 
 export default uk;

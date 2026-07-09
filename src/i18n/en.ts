@@ -200,10 +200,14 @@ export const en: Translations = {
   REPORT_UPLOADED: 'Uploaded at',
   REPORT_PLATFORM: 'Platform',
   REPORT_SHADOWBAN: 'Shadowban',
-  REPORT_TOTAL_STATS: 'Overall account statistics',
+  REPORT_SHADOWBAN_YES: '🚫 Yes',
+  REPORT_SHADOWBAN_NO: '✅ No',
+  REPORT_TOTAL_STATS: 'Account info',
   REPORT_FOLLOWERS: 'followers',
   REPORT_VIDEOS: 'videos',
   REPORT_NA: 'N/A',
+  REPORT_TOTAL_LIKES: 'total likes',
+  REPORT_SAMPLE_STATS: 'Recent videos',
 };
 
 export default en;

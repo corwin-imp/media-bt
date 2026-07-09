@@ -16,6 +16,7 @@ export interface VideoStat {
   comments: number;
   shares: number;
   saves: number;
+  shadowbanned: boolean;
 }
 
 export interface AccountInfo {
@@ -25,6 +26,7 @@ export interface AccountInfo {
   url: string;
   followers: number | null;
   videoCount: number | null;
+  accountTotalLikes: number | null;
   totalViews: number;
   totalLikes: number;
   totalComments: number;
@@ -32,6 +34,7 @@ export interface AccountInfo {
   totalSaves: number;
   verified: boolean;
   createdAt: Date | null;
+  shadowbanned: boolean;
   videos: VideoStat[];
 }
 
@@ -128,13 +131,51 @@ function ytdlpJSON(args: string[], timeoutMs = 120000): Promise<any[]> {
   });
 }
 
+/**
+ * Count total entries in a playlist/channel using --flat-playlist --print id.
+ * This is fast because it skips downloading individual video metadata.
+ * Returns null if it fails or times out.
+ */
+function ytdlpPlaylistCount(url: string, timeoutMs = 45000): Promise<number | null> {
+  return new Promise((resolve) => {
+    const proc = spawn('yt-dlp', [
+      '--flat-playlist',
+      '--print', 'id',
+      '--no-warnings',
+      '--no-progress',
+      url,
+    ], { windowsHide: true });
+
+    let count = 0;
+    const timer = setTimeout(() => {
+      proc.kill();
+      resolve(count > 0 ? count : null);
+    }, timeoutMs);
+
+    proc.stdout.on('data', (d: Buffer) => {
+      const text = d.toString();
+      // Each line is a video id — count non-empty lines
+      count += text.split('\n').filter((l) => l.trim()).length;
+    });
+
+    proc.on('close', () => {
+      clearTimeout(timer);
+      resolve(count > 0 ? count : null);
+    });
+
+    proc.on('error', () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+  });
+}
+
 function toDate(entry: any): Date | null {
   if (!entry) return null;
   if (entry.upload_date && /^\d{8}$/.test(entry.upload_date)) {
     const y = +entry.upload_date.slice(0, 4);
     const mo = +entry.upload_date.slice(4, 6);
     const d = +entry.upload_date.slice(6, 8);
-    const hh = +((entry.timestamp || 0) % 86400);
     if (entry.timestamp) return new Date(entry.timestamp * 1000);
     return new Date(Date.UTC(y, mo - 1, d));
   }
@@ -150,6 +191,97 @@ function toDate(entry: any): Date | null {
 function num(x: any): number {
   const n = typeof x === 'number' ? x : parseInt(x, 10);
   return isNaN(n) ? 0 : n;
+}
+
+/** How old is this video in hours? Returns null if date is unknown. */
+function hoursSinceUpload(entry: any): number | null {
+  const d = toDate(entry);
+  if (!d) return null;
+  return (Date.now() - d.getTime()) / (1000 * 60 * 60);
+}
+
+/**
+ * Heuristic shadow-ban detection.
+ *
+ * A video is considered shadow-banned when:
+ * 1. yt-dlp reports a non-public availability (private, premium_only, etc.)
+ * 2. The video has 0 views and was uploaded more than 1 hour ago
+ *    (TikTok/Instagram videos normally accumulate views within minutes)
+ * 3. The video has 0 views and the upload date is unknown (suspicious)
+ *
+ * This is a heuristic — not 100% accurate, but covers the common cases.
+ */
+function detectShadowban(entry: any): boolean {
+  // 1. Check explicit availability field
+  if (entry.availability && entry.availability !== 'public' && entry.availability !== 'unlisted') {
+    return true;
+  }
+
+  const views = num(entry.view_count);
+
+  // 2. Zero views after 1+ hours = likely shadow-banned
+  if (views === 0) {
+    const hoursOld = hoursSinceUpload(entry);
+    if (hoursOld === null) return true;       // 0 views, unknown date — suspicious
+    if (hoursOld > 1) return true;             // 0 views after 1 hour — very likely shadow-banned
+  }
+
+  return false;
+}
+
+/**
+ * Fetch TikTok account-level statistics (followers, total likes, video count,
+ * creation date, verification) by scraping the profile page HTML.
+ *
+ * yt-dlp does NOT provide follower counts for TikTok (unlike YouTube), so we
+ * fetch the page directly and parse the embedded `__UNIVERSAL_DATA_FOR_REHYDRATION__`
+ * JSON blob which contains a `webapp.user-detail` scope with `userInfo.stats`.
+ *
+ * Returns null on any failure so the caller can gracefully fall back.
+ */
+interface TikTokAccountStats {
+  followers: number | null;
+  totalLikes: number | null;
+  videoCount: number | null;
+  verified: boolean | null;
+  createdAt: Date | null;
+  displayName: string | null;
+}
+
+async function fetchTikTokAccountStats(url: string): Promise<TikTokAccountStats | null> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-us,en;q=0.5',
+      },
+      redirect: 'follow',
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    const m = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
+    if (!m) return null;
+
+    const json = JSON.parse(m[1]);
+    const scope = json.__DEFAULT_SCOPE__ || {};
+    const detail = scope['webapp.user-detail'] || {};
+    const userInfo = detail.userInfo || {};
+    const user = userInfo.user || {};
+    const stats = userInfo.stats || {};
+
+    return {
+      followers: typeof stats.followerCount === 'number' ? stats.followerCount : null,
+      totalLikes: typeof stats.heartCount === 'number' ? stats.heartCount : null,
+      videoCount: typeof stats.videoCount === 'number' ? stats.videoCount : null,
+      verified: typeof user.verified === 'boolean' ? user.verified : null,
+      createdAt: typeof user.createTime === 'number' ? new Date(user.createTime * 1000) : null,
+      displayName: user.nickname || user.uniqueId || null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Fetch the N newest videos + account summary for a parsed account. */
@@ -184,20 +316,67 @@ export async function fetchAccount(parsed: ParsedAccount, limit = 5): Promise<Ac
     comments: num(e.comment_count),
     shares: num(e.repost_count ?? e.share_count),
     saves: num(e.favourite_count ?? e.bookmark_count),
+    shadowbanned: detectShadowban(e),
   }));
 
   const first = entries[0] || {};
-  const followers = typeof first.channel_follower_count === 'number' ? first.channel_follower_count : null;
-  const videoCount = typeof first.playlist_count === 'number' ? first.playlist_count : null;
-  const verified = !!first.channel_is_verified;
-  const displayName = first.channel || first.uploader || first.uploader_id || parsed.username;
-  const createdAt = toDate(first) || null;
 
-  const totalViews = videos.reduce((a, v) => a + v.views, 0);
-  const totalLikes = videos.reduce((a, v) => a + v.likes, 0);
-  const totalComments = videos.reduce((a, v) => a + v.comments, 0);
-  const totalShares = videos.reduce((a, v) => a + v.shares, 0);
-  const totalSaves = videos.reduce((a, v) => a + v.saves, 0);
+  // --- Account-level data from yt-dlp (may be missing for TikTok) ---
+  let followers =
+    typeof first.channel_follower_count === 'number' ? first.channel_follower_count :
+    typeof first.uploader_subscriber_count === 'number' ? first.uploader_subscriber_count :
+    typeof first.subscriber_count === 'number' ? first.subscriber_count :
+    null;
+
+  // --- Video count: try playlist_count first, fall back to flat-playlist count ---
+  let videoCount =
+    typeof first.playlist_count === 'number' ? first.playlist_count :
+    null;
+
+  // If playlist_count wasn't available, try to count via --flat-playlist (non-blocking on failure)
+  if (videoCount === null) {
+    try {
+      videoCount = await ytdlpPlaylistCount(parsed.url, 45000);
+    } catch {
+      videoCount = null;
+    }
+  }
+
+  let verified = !!first.channel_is_verified;
+  let displayName = first.channel || first.uploader || first.uploader_id || parsed.username;
+  let createdAt = toDate(first) || null;
+  let accountTotalLikes: number | null = null;
+
+  // --- TikTok: scrape the profile page for real account-level stats ---
+  // yt-dlp does NOT provide follower counts / total likes for TikTok, so we
+  // fetch the page directly. This also gives us an accurate videoCount and
+  // account creation date.
+  if (parsed.platform === 'tiktok') {
+    const tt = await fetchTikTokAccountStats(parsed.url);
+    if (tt) {
+      if (tt.followers !== null) followers = tt.followers;
+      if (tt.totalLikes !== null) accountTotalLikes = tt.totalLikes;
+      if (tt.videoCount !== null) videoCount = tt.videoCount;
+      if (tt.verified !== null) verified = tt.verified;
+      if (tt.createdAt) createdAt = tt.createdAt;
+      if (tt.displayName) displayName = tt.displayName;
+    }
+  }
+
+  // --- Sample stats from the displayed videos ---
+  // These are NOT account totals — they reflect only the last N videos.
+  const sampleViews = videos.reduce((a, v) => a + v.views, 0);
+  const sampleLikes = videos.reduce((a, v) => a + v.likes, 0);
+  const sampleComments = videos.reduce((a, v) => a + v.comments, 0);
+  const sampleShares = videos.reduce((a, v) => a + v.shares, 0);
+  const sampleSaves = videos.reduce((a, v) => a + v.saves, 0);
+
+  // For TikTok we have the real total likes; for others it stays null
+  const totalLikes = accountTotalLikes !== null ? accountTotalLikes : sampleLikes;
+
+  // Account-level shadow ban: ALL recent videos have 0 views / are flagged
+  const shadowbannedVideos = videos.filter((v) => v.shadowbanned);
+  const accountShadowbanned = videos.length > 0 && shadowbannedVideos.length === videos.length;
 
   return {
     platform: parsed.platform,
@@ -206,13 +385,15 @@ export async function fetchAccount(parsed: ParsedAccount, limit = 5): Promise<Ac
     url: parsed.url,
     followers,
     videoCount,
-    totalViews,
+    accountTotalLikes,
+    totalViews: sampleViews,
     totalLikes,
-    totalComments,
-    totalShares,
-    totalSaves,
+    totalComments: sampleComments,
+    totalShares: sampleShares,
+    totalSaves: sampleSaves,
     verified,
     createdAt,
+    shadowbanned: accountShadowbanned,
     videos,
   };
 }
@@ -258,31 +439,40 @@ export function formatAccountReport(info: AccountInfo, t?: Translations): string
   const labelUploaded = t?.REPORT_UPLOADED || 'Завантажено о';
   const labelPlatform = t?.REPORT_PLATFORM || 'Платформа';
   const labelShadowban = t?.REPORT_SHADOWBAN || 'Тіньовий бан';
-  const labelTotalStats = t?.REPORT_TOTAL_STATS || 'Загальна статистика акаунту';
+  const labelTotalStats = t?.REPORT_TOTAL_STATS || 'Інформація про акаунт';
   const labelFollowers = t?.REPORT_FOLLOWERS || 'підписників';
   const labelVideos = t?.REPORT_VIDEOS || 'відео';
+  const labelTotalLikes = t?.REPORT_TOTAL_LIKES || 'всього лайків';
+  const labelSampleStats = t?.REPORT_SAMPLE_STATS || 'Останні відео';
+  const shadowbanYes = t?.REPORT_SHADOWBAN_YES || '🚫 Так';
+  const shadowbanNo = t?.REPORT_SHADOWBAN_NO || '✅ Ні';
 
   const fmtCount = (n: number | null | undefined, precise?: boolean) => formatCount(n, { precise, na });
 
-  let idx = 1;
-  for (const v of info.videos) {
-    lines.push(`📹 🎞 ${labelVideo}: ${idx} (${v.url})`);
-    lines.push(`├ ${labelUploaded}: ${formatVideoDate(v.uploadDate, na)}`);
-    lines.push(`├ ${labelPlatform} : ${PLATFORM_LABEL[info.platform]}`);
-    lines.push(`├ ${labelShadowban}: ${na}`);
-    lines.push(`└ 👁 : ${fmtCount(v.views)} ❤️ : ${fmtCount(v.likes)} 💬 : ${fmtCount(v.comments)} 📢 : ${fmtCount(v.shares)} 💾 : ${fmtCount(v.saves)}`);
-    lines.push('');
-    idx++;
-  }
-
+  // --- Account info block (real account-level data) ---
   const handle = info.username.startsWith('@') || info.platform !== 'tiktok' ? info.username : `@${info.username}`;
   lines.push(`🌸 ${labelTotalStats}:`);
   lines.push(`${handle} (${info.url})${info.verified ? ' ✓' : ''} | ${PLATFORM_LABEL[info.platform]}`);
-  lines.push(`├ 👁 : ${fmtCount(info.totalViews)} ❤️ : ${fmtCount(info.totalLikes)} 💬 : ${fmtCount(info.totalComments)}`);
-  lines.push(`├ 📢 : ${fmtCount(info.totalShares)} 💾 : ${fmtCount(info.totalSaves)} ⚠️ : 0`);
-  lines.push(`├ 📅 : ${formatAccountDate(info.createdAt, na)}`);
   lines.push(`├ 👥 : ${fmtCount(info.followers, true)} ${labelFollowers}`);
-  lines.push(`└ 📹 : ${info.videoCount !== null ? fmtCount(info.videoCount) : na} ${labelVideos}`);
+  lines.push(`├ ❤️ : ${fmtCount(info.accountTotalLikes, true)} ${labelTotalLikes}`);
+  lines.push(`├ 📹 : ${info.videoCount !== null ? fmtCount(info.videoCount) : na} ${labelVideos}`);
+  lines.push(`├ 📅 : ${formatAccountDate(info.createdAt, na)}`);
+  lines.push(`└ ${labelShadowban}: ${info.shadowbanned ? shadowbanYes : shadowbanNo}`);
+  lines.push('');
+
+  // --- Recent videos block (per-video stats) ---
+  lines.push(`📊 ${labelSampleStats}:`);
+  let idx = 1;
+  for (const v of info.videos) {
+    const isLast = idx === info.videos.length;
+    const prefix = isLast ? '└' : '├';
+    const cont = isLast ? ' ' : '│';
+    lines.push(`${prefix} 🎞 ${labelVideo} ${idx}: ${v.url}`);
+    lines.push(`${cont}  ${labelUploaded}: ${formatVideoDate(v.uploadDate, na)}`);
+    lines.push(`${cont}  ${labelShadowban}: ${v.shadowbanned ? shadowbanYes : shadowbanNo}`);
+    lines.push(`${cont}  👁 : ${fmtCount(v.views)} ❤️ : ${fmtCount(v.likes)} 💬 : ${fmtCount(v.comments)} 📢 : ${fmtCount(v.shares)} 💾 : ${fmtCount(v.saves)}`);
+    idx++;
+  }
 
   return lines.join('\n');
 }
