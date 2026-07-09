@@ -154,16 +154,24 @@ export const uk: Translations = {
   ACCOUNTS_PROMPT: (
     '📊 *Перегляд акаунтів*\n\n'
     + 'Надішліть посилання або @username акаунта TikTok, Instagram або YouTube.\n'
+    + 'Можна вказати одразу кілька акаунтів через кому або пробіл (макс. 8).\n'
     + 'Приклади:\n'
     + '• @coinbase\n'
     + '• https://www.tiktok.com/@coinbase\n'
     + '• https://www.instagram.com/coinbase/\n'
-    + '• https://www.youtube.com/@MrBeast\n\n'
-    + 'Бот покаже 5 останніх відео та загальну статистику.'
+    + '• https://www.youtube.com/@MrBeast\n'
+    + '• @user1, @user2, @user3\n'
+    + '• tiktok.com/@a instagram.com/@b youtube.com/@c\n\n'
+    + 'Бот покаже 5 останніх відео та загальну статистику по кожному акаунту.'
   ),
   ACCOUNTS_INVALID: 'Не вдалося розпізнати акаунт. Надішліть посилання або @username (TikTok/Instagram/YouTube).',
   ACCOUNTS_FETCHING: '⏳ Збираю дані акаунта... (може зайняти до 30 секунд)',
+  ACCOUNTS_FETCHING_MULTIPLE: (count: number) => `⏳ Збираю дані ${count} акаунтів... (може зайняти час)`,
+  ACCOUNTS_PROGRESS: (index: number, total: number, name: string) => `🔎 [${index}/${total}] ${name}`,
   ACCOUNTS_DONE: '✅ Готово.',
+  ACCOUNTS_DONE_MULTIPLE: (success: number, total: number) => `✅ Готово. Успішно оброблено: ${success} з ${total}.`,
+  ACCOUNTS_SKIPPED: (count: number) => `⚠️ Не вдалося розпізнати: ${count}`,
+  ACCOUNTS_LIMIT: (limit: number) => `⚠️ Забагато акаунтів. Оброблено перші ${limit}.`,
 
   // Platforms
   PLATFORM_TIKTOK: 'TikTok',

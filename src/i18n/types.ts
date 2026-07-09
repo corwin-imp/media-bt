@@ -114,6 +114,11 @@ export interface Translations {
   ACCOUNTS_INVALID: string;
   ACCOUNTS_FETCHING: string;
   ACCOUNTS_DONE: string;
+  ACCOUNTS_FETCHING_MULTIPLE: (count: number) => string;
+  ACCOUNTS_PROGRESS: (index: number, total: number, name: string) => string;
+  ACCOUNTS_DONE_MULTIPLE: (success: number, total: number) => string;
+  ACCOUNTS_SKIPPED: (count: number) => string;
+  ACCOUNTS_LIMIT: (limit: number) => string;
 
   // Platforms
   PLATFORM_TIKTOK: string;

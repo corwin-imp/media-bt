@@ -95,6 +95,64 @@ export function parseAccountInput(input: string): ParsedAccount | null {
   return null;
 }
 
+/** Maximum number of accounts processed in a single request. */
+export const MAX_ACCOUNTS = 8;
+
+/**
+ * Parse a user message that may contain several accounts separated by commas
+ * and/or whitespace.
+ *
+ * Tokenization strategy:
+ * - Split the input on any run of commas and/or whitespace.
+ *   This is safe because neither canonical social profile URLs
+ *   (tiktok.com/@x, instagram.com/x, youtube.com/@x) nor bare usernames
+ *   contain spaces or commas.
+ * - Examples handled:
+ *   "@a, @b, @c"
+ *   "@a @b @c"
+ *   "tiktok.com/@a instagram.com/@b youtube.com/@c"
+ *   "https://www.tiktok.com/@a, https://www.youtube.com/@b"
+ *
+ * After tokenization, each token is parsed via `parseAccountInput`. Results are
+ * de-duplicated by canonical URL. Order of first occurrence is preserved.
+ *
+ * Returns a structured result: valid accounts + the list of raw tokens that
+ * could not be parsed (for a helpful error count).
+ */
+export interface ParsedAccountsResult {
+  valid: ParsedAccount[];
+  invalid: string[];
+}
+
+export function parseMultipleAccounts(input: string): ParsedAccountsResult {
+  const raw = (input || '').trim();
+  if (!raw) return { valid: [], invalid: [] };
+
+  // Tokenize by commas and/or whitespace.
+  // This is safe because neither URLs nor usernames contain spaces/commas:
+  // - Social profile URLs (tiktok.com/@x, instagram.com/x, youtube.com/@x)
+  //   never include spaces or commas in their canonical form.
+  // - Bare usernames match /^[A-Za-z0-9._\-]+$/.
+  const tokens = raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+
+  const valid: ParsedAccount[] = [];
+  const invalid: string[] = [];
+  const seen = new Set<string>();
+
+  for (const token of tokens) {
+    const parsed = parseAccountInput(token);
+    if (!parsed) {
+      invalid.push(token);
+      continue;
+    }
+    if (seen.has(parsed.url)) continue; // de-duplicate by canonical URL
+    seen.add(parsed.url);
+    valid.push(parsed);
+  }
+
+  return { valid, invalid };
+}
+
 /** Spawn yt-dlp and collect newline-delimited JSON objects. */
 function ytdlpJSON(args: string[], timeoutMs = 120000): Promise<any[]> {
   return new Promise((resolve, reject) => {

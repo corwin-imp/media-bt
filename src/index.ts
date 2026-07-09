@@ -5,7 +5,7 @@ import { SQLiteStorage } from './storage/sqlite-storage.js';
 import { processTask } from './services/pipeline.js';
 import { resolveSourceWithQuality } from './services/video-downloader.js';
 import { fetchTrendingHashtags } from './services/trends.js';
-import { parseAccountInput, fetchAccount, formatAccountReport } from './services/account-viewer.js';
+import { parseMultipleAccounts, fetchAccount, formatAccountReport, MAX_ACCOUNTS } from './services/account-viewer.js';
 import { getT, translations, DEFAULT_LOCALE, type Locale } from './i18n/index.js';
 import { promises as fs } from 'fs';
 import path from 'path';
@@ -731,19 +731,69 @@ async function handleAccountInput(msg: any, chatId: number): Promise<void> {
     await bot.sendMessage(chatId, t.ACCOUNTS_INVALID);
     return;
   }
-  const parsed = parseAccountInput(text);
-  if (!parsed) {
+
+  // Parse possibly multiple accounts (separated by comma and/or whitespace)
+  const { valid, invalid } = parseMultipleAccounts(text);
+
+  if (valid.length === 0) {
     await bot.sendMessage(chatId, t.ACCOUNTS_INVALID);
     return;
   }
-  await bot.sendMessage(chatId, t.ACCOUNTS_FETCHING);
-  try {
-    const info = await fetchAccount(parsed, 5);
-    const report = formatAccountReport(info, t);
-    await bot.sendMessage(chatId, report);
+
+  // Enforce a hard limit so users (and the bot) are not overwhelmed
+  let limited = false;
+  let toProcess = valid;
+  if (valid.length > MAX_ACCOUNTS) {
+    limited = true;
+    toProcess = valid.slice(0, MAX_ACCOUNTS);
+  }
+
+  const total = toProcess.length;
+  const isMultiple = total > 1;
+
+  // Initial status message
+  if (isMultiple) {
+    let status = t.ACCOUNTS_FETCHING_MULTIPLE(total);
+    if (invalid.length > 0) status += '\n' + t.ACCOUNTS_SKIPPED(invalid.length);
+    if (limited) status += '\n' + t.ACCOUNTS_LIMIT(MAX_ACCOUNTS);
+    await bot.sendMessage(chatId, status);
+  } else {
+    // Single account — keep the original short message for backward compat
+    if (invalid.length > 0) {
+      await bot.sendMessage(chatId, t.ACCOUNTS_SKIPPED(invalid.length));
+    }
+    await bot.sendMessage(chatId, t.ACCOUNTS_FETCHING);
+  }
+
+  let success = 0;
+
+  for (let i = 0; i < toProcess.length; i++) {
+    const parsed = toProcess[i];
+    const handle = parsed.username.startsWith('@') || parsed.platform !== 'tiktok'
+      ? parsed.username
+      : `@${parsed.username}`;
+
+    // Per-account progress indicator for multi-account requests
+    if (isMultiple) {
+      await bot.sendMessage(chatId, t.ACCOUNTS_PROGRESS(i + 1, total, handle));
+    }
+
+    try {
+      const info = await fetchAccount(parsed, 5);
+      const report = formatAccountReport(info, t);
+      await bot.sendMessage(chatId, report);
+      success++;
+    } catch (error: any) {
+      // Report failure for this particular account, but continue with the rest
+      await bot.sendMessage(chatId, `❌ ${handle}: ${error?.message || t.ERROR_GENERIC}`);
+    }
+  }
+
+  // Final summary
+  if (isMultiple) {
+    await bot.sendMessage(chatId, t.ACCOUNTS_DONE_MULTIPLE(success, total));
+  } else if (success > 0) {
     await bot.sendMessage(chatId, t.ACCOUNTS_DONE);
-  } catch (error: any) {
-    await bot.sendMessage(chatId, `❌ ${error?.message || t.ERROR_GENERIC}`);
   }
 }
 

@@ -154,16 +154,24 @@ export const en: Translations = {
   ACCOUNTS_PROMPT: (
     '📊 *View accounts*\n\n'
     + 'Send a link or @username of a TikTok, Instagram or YouTube account.\n'
+    + 'You can send multiple accounts at once, separated by comma or space (max 8).\n'
     + 'Examples:\n'
     + '• @coinbase\n'
     + '• https://www.tiktok.com/@coinbase\n'
     + '• https://www.instagram.com/coinbase/\n'
-    + '• https://www.youtube.com/@MrBeast\n\n'
-    + 'The bot will show the 5 latest videos and overall statistics.'
+    + '• https://www.youtube.com/@MrBeast\n'
+    + '• @user1, @user2, @user3\n'
+    + '• tiktok.com/@a instagram.com/@b youtube.com/@c\n\n'
+    + 'The bot will show the 5 latest videos and overall statistics for each account.'
   ),
   ACCOUNTS_INVALID: 'Could not recognize the account. Send a link or @username (TikTok/Instagram/YouTube).',
   ACCOUNTS_FETCHING: '⏳ Collecting account data... (may take up to 30 seconds)',
+  ACCOUNTS_FETCHING_MULTIPLE: (count: number) => `⏳ Collecting data for ${count} accounts... (may take a while)`,
+  ACCOUNTS_PROGRESS: (index: number, total: number, name: string) => `🔎 [${index}/${total}] ${name}`,
   ACCOUNTS_DONE: '✅ Done.',
+  ACCOUNTS_DONE_MULTIPLE: (success: number, total: number) => `✅ Done. Successfully processed: ${success} of ${total}.`,
+  ACCOUNTS_SKIPPED: (count: number) => `⚠️ Could not recognize: ${count}`,
+  ACCOUNTS_LIMIT: (limit: number) => `⚠️ Too many accounts. Processing the first ${limit}.`,
 
   // Platforms
   PLATFORM_TIKTOK: 'TikTok',
